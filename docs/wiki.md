@@ -383,7 +383,7 @@ The published subject does not match any JetStream stream.
 
 ### Message published but handler never fires
 
-- The durable consumer is created asynchronously on first `Subscribe`. If a message arrives in the milliseconds before the consumer is fully registered, it is stored in the stream and delivered when the consumer connects (delivery policy is `All`)
+- The durable consumer is created asynchronously on first `Subscribe`. For existing consumers (restarts), NATS resumes from the last acknowledged position automatically. For brand-new consumers, `DeliverPolicy.All` is used so that messages already retained in the stream — kept alive by other consumers' `Interest` — are delivered on first connect. Note: with `Interest` retention, a message published when **no consumers at all** exist on the stream is discarded immediately by NATS and cannot be recovered regardless of delivery policy.
 - Check that the stream `Retention` is not `Workqueue` — that policy deletes after the first consumer acks, breaking fan-out
 - Verify the handler class is registered with ABP's DI (`[ExposeServices]` or module registration)
 

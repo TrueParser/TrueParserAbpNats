@@ -227,20 +227,36 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                     var js = await JetStreamContextAccessor.GetContextAsync(NatsOptions.ConnectionName);
                     await EnsureStreamExistsAsync();
 
-                    var consumerConfig = new ConsumerConfig(consumerName)
+                    INatsJSConsumer consumer;
+                    try
                     {
-                        FilterSubject = subject,
-                        AckPolicy = ConsumerConfigAckPolicy.Explicit,
-                        DeliverPolicy = ConsumerConfigDeliverPolicy.New
-                    };
+                        // Existing durable consumer — bind without touching config.
+                        // The stored delivery sequence overrides DeliverPolicy, so
+                        // restarts resume from the last acked position automatically.
+                        consumer = await js.GetConsumerAsync(NatsOptions.StreamName, consumerName, shutdownToken);
+                    }
+                    catch (NatsJSApiException ex) when (ex.Error.Code == 404)
+                    {
+                        // New consumer (first deployment of this event type).
+                        // DeliverPolicy.All ensures messages already retained in the
+                        // stream — kept alive by other consumers' Interest — are not
+                        // silently skipped. DeliverPolicy.New would miss that backlog.
+                        var consumerConfig = new ConsumerConfig(consumerName)
+                        {
+                            FilterSubject = subject,
+                            AckPolicy = ConsumerConfigAckPolicy.Explicit,
+                            DeliverPolicy = ConsumerConfigDeliverPolicy.All
+                        };
 
-                    var prefetchCount = ParsePrefetchCount(NatsOptions.PrefetchCount);
-                    if (prefetchCount.HasValue)
-                    {
-                        consumerConfig.MaxAckPending = prefetchCount.Value;
+                        var prefetchCount = ParsePrefetchCount(NatsOptions.PrefetchCount);
+                        if (prefetchCount.HasValue)
+                        {
+                            consumerConfig.MaxAckPending = prefetchCount.Value;
+                        }
+
+                        consumer = await js.CreateOrUpdateConsumerAsync(NatsOptions.StreamName, consumerConfig, shutdownToken);
                     }
 
-                    var consumer = await js.CreateOrUpdateConsumerAsync(NatsOptions.StreamName, consumerConfig);
                     startupSignal.TrySetResult();
 
                     await foreach (var msg in consumer.ConsumeAsync<byte[]>(cancellationToken: shutdownToken))
@@ -349,16 +365,6 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         var startupSignal = ConsumerStartupSignals.GetOrAdd(
             eventName,
             _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
-
-        startupSignal.Task.ContinueWith(
-            task =>
-            {
-                if (task.IsFaulted && task.Exception != null)
-                {
-                    Logger.LogError(task.Exception, "NATS consumer startup failed for event: {EventName}", eventName);
-                }
-            },
-            TaskScheduler.Default);
 
         _ = Task.Run(() => SubscribeToSubjectAsync(eventName, consumerCancellationSource.Token, startupSignal));
     }

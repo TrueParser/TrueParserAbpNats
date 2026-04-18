@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Threading.Tasks;
+using NATS.Client.Core;
 using NATS.Client.JetStream;
 using NATS.Net;
 using Volo.Abp.DependencyInjection;
@@ -10,7 +11,7 @@ namespace TrueParser.Abp.Nats;
 public class JetStreamContextAccessor : IJetStreamContextAccessor, ISingletonDependency
 {
     private readonly INatsConnectionPool _connectionPool;
-    private readonly ConcurrentDictionary<string, Lazy<INatsJSContext>> _contexts = new();
+    private readonly ConcurrentDictionary<string, (INatsConnection Connection, INatsJSContext Context)> _contexts = new();
 
     public JetStreamContextAccessor(INatsConnectionPool connectionPool)
     {
@@ -20,15 +21,16 @@ public class JetStreamContextAccessor : IJetStreamContextAccessor, ISingletonDep
     public async ValueTask<INatsJSContext> GetContextAsync(string? connectionName = null)
     {
         var cacheKey = connectionName ?? "Default";
-        if (_contexts.TryGetValue(cacheKey, out var existing))
-        {
-            return existing.Value;
-        }
         var connection = await _connectionPool.GetAsync(connectionName);
-        return _contexts.GetOrAdd(
-            cacheKey,
-            _ => new Lazy<INatsJSContext>(
-                connection.CreateJetStreamContext,
-                System.Threading.LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+
+        if (_contexts.TryGetValue(cacheKey, out var cached) && ReferenceEquals(cached.Connection, connection))
+        {
+            return cached.Context;
+        }
+
+        // Connection object is new or was replaced — create a fresh JetStream context.
+        var context = connection.CreateJetStreamContext();
+        _contexts[cacheKey] = (connection, context);
+        return context;
     }
 }
