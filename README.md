@@ -4,10 +4,11 @@
 [![NuGet](https://img.shields.io/nuget/v/TrueParser.Abp.Nats.svg?style=flat-square&label=TrueParser.Abp.Nats)](https://www.nuget.org/packages/TrueParser.Abp.Nats)
 [![Build](https://img.shields.io/github/actions/workflow/status/trueparser/trueparser-abp-nats/ci.yml?style=flat-square)](https://github.com/trueparser/trueparser-abp-nats/actions)
 [![License: LGPL v3](https://img.shields.io/badge/License-LGPL%20v3-blue.svg?style=flat-square)](./LICENSE)
-[![ABP](https://img.shields.io/badge/ABP-10.x-brightgreen?style=flat-square)](https://abp.io)
 [![.NET](https://img.shields.io/badge/.NET-10-purple?style=flat-square)](https://dotnet.microsoft.com)
 
 **NATS JetStream** distributed event bus for the **ABP Framework** — a drop-in replacement for `Volo.Abp.EventBus.RabbitMQ` with minimal migration effort.
+
+> This project is an independent community library and is not affiliated with, endorsed by, or officially connected to ABP or Volosoft.
 
 ---
 

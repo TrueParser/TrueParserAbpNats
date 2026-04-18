@@ -3,6 +3,12 @@
   <PropertyGroup>
     <!-- RootNamespace set to empty so we can use folders as namespaces properly -->
     <RootNamespace />
+    <PackageVersion>10.3.0-alpha</PackageVersion>
+    <PackageId>TrueParser.Abp.Nats</PackageId>
+    <Title>TrueParser.Abp.Nats</Title>
+    <Description>Core NATS JetStream infrastructure for ABP applications.</Description>
+    <PackageTags>abp;nats;jetstream;infrastructure;trueparser</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -10,6 +16,10 @@
     <PackageReference Include="Volo.Abp.Threading" />
     <PackageReference Include="Volo.Abp.Core" />
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="" />
   </ItemGroup>
 
 </Project>
