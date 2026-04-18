@@ -164,6 +164,18 @@ Full configuration reference, advanced patterns, and architecture details are in
 
 ---
 
+## Contributing
+
+Thanks for your interest in contributing!
+
+At this stage, this project is primarily maintained for internal use.
+We welcome issues, bug reports, and feature suggestions.
+
+Pull requests may not be accepted unless discussed in an issue first.
+This helps us keep the architecture aligned with internal requirements.
+
+---
+
 ## License
 
 LGPL-3.0 — see [LICENSE](./LICENSE).
