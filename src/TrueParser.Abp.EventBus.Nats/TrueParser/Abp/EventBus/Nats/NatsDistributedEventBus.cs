@@ -6,7 +6,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NATS.Client.JetStream;
 using NATS.Client.JetStream.Models;
@@ -28,23 +27,25 @@ namespace TrueParser.Abp.EventBus.Nats;
 
 [Dependency(ReplaceServices = true)]
 [ExposeServices(typeof(IDistributedEventBus), typeof(NatsDistributedEventBus))]
-public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDependency
+public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDependency, IOnApplicationShutdown
 {
     protected NatsDistributedEventBusOptions NatsOptions { get; }
-    protected INatsConnectionPool ConnectionPool { get; }
+    protected IJetStreamContextAccessor JetStreamContextAccessor { get; }
     protected INatsEventSerializer Serializer { get; }
     protected ILogger<NatsDistributedEventBus> Logger { get; set; }
 
     protected ConcurrentDictionary<Type, List<IEventHandlerFactory>> HandlerFactories { get; }
     protected ConcurrentDictionary<string, List<IEventHandlerFactory>> DynamicHandlerFactories { get; }
     protected ConcurrentDictionary<string, Type> EventTypes { get; }
+    protected ConcurrentDictionary<string, CancellationTokenSource> ConsumerCancellationSources { get; }
 
-    private bool _streamCreated;
+    private volatile bool _streamCreated;
     private readonly SemaphoreSlim _streamSemaphore = new(1, 1);
+    private readonly CancellationTokenSource _shutdownCts = new();
 
     public NatsDistributedEventBus(
         IOptions<NatsDistributedEventBusOptions> natsOptions,
-        INatsConnectionPool connectionPool,
+        IJetStreamContextAccessor jetStreamContextAccessor,
         INatsEventSerializer serializer,
         IServiceScopeFactory serviceScopeFactory,
         IOptions<AbpDistributedEventBusOptions> distributedEventBusOptions,
@@ -54,7 +55,8 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         IClock clock,
         IEventHandlerInvoker eventHandlerInvoker,
         ILocalEventBus localEventBus,
-        ICorrelationIdProvider correlationIdProvider)
+        ICorrelationIdProvider correlationIdProvider,
+        ILogger<NatsDistributedEventBus> logger)
         : base(
             serviceScopeFactory,
             currentTenant,
@@ -67,13 +69,14 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
             correlationIdProvider)
     {
         NatsOptions = natsOptions.Value;
-        ConnectionPool = connectionPool;
+        JetStreamContextAccessor = jetStreamContextAccessor;
         Serializer = serializer;
-        Logger = NullLogger<NatsDistributedEventBus>.Instance;
+        Logger = logger;
 
         HandlerFactories = new ConcurrentDictionary<Type, List<IEventHandlerFactory>>();
         DynamicHandlerFactories = new ConcurrentDictionary<string, List<IEventHandlerFactory>>();
         EventTypes = new ConcurrentDictionary<string, Type>();
+        ConsumerCancellationSources = new ConcurrentDictionary<string, CancellationTokenSource>();
     }
 
     public virtual async Task InitializeAsync()
@@ -91,8 +94,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         {
             if (_streamCreated) return;
 
-            var connection = await ConnectionPool.GetAsync(NatsOptions.ConnectionName);
-            var js = connection.CreateJetStreamContext();
+            var js = await JetStreamContextAccessor.GetContextAsync(NatsOptions.ConnectionName);
 
             var streamConfig = new StreamConfig(NatsOptions.StreamName, [$"{NatsOptions.SubjectPrefix}.>"])
             {
@@ -100,15 +102,22 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                 NumReplicas = NatsOptions.ReplicaCount
             };
 
+            var maxAge = ParseMaxAge(NatsOptions.MaxAge);
+            if (maxAge.HasValue)
+            {
+                streamConfig.MaxAge = maxAge.Value;
+            }
+
             try
             {
                 await js.CreateStreamAsync(streamConfig);
+                _streamCreated = true;
             }
             catch (NatsJSApiException ex) when (ex.Error.ErrCode == 10058)
             {
                 // Stream already exists — that is fine
+                _streamCreated = true;
             }
-            _streamCreated = true;
         }
         catch (Exception ex)
         {
@@ -127,16 +136,36 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
     {
         var handlerFactories = GetOrCreateHandlerFactories(eventType);
 
-        if (factory.IsInFactories(handlerFactories))
+        var added = false;
+        var shouldSubscribe = false;
+        handlerFactories.Locking(factories =>
+        {
+            if (factory.IsInFactories(factories))
+            {
+                return;
+            }
+
+            shouldSubscribe = factories.Count == 0;
+            factories.Add(factory);
+            added = true;
+        });
+
+        if (!added)
         {
             return NullDisposable.Instance;
         }
 
-        handlerFactories.Add(factory);
-
-        if (handlerFactories.Count == 1)
+        if (shouldSubscribe)
         {
-            _ = Task.Run(() => SubscribeToSubjectAsync(EventNameAttribute.GetNameOrDefault(eventType)));
+            var eventName = EventNameAttribute.GetNameOrDefault(eventType);
+            var consumerCancellationSource = GetOrCreateConsumerCancellationSource(eventName);
+            var startupSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _ = Task.Run(() => SubscribeToSubjectAsync(eventName, consumerCancellationSource.Token, startupSignal));
+
+            if (!startupSignal.Task.Wait(TimeSpan.FromSeconds(10)))
+            {
+                Logger.LogWarning("Timed out waiting for NATS consumer startup for event: {EventName}", eventName);
+            }
         }
 
         return new EventHandlerFactoryUnregistrar(this, eventType, factory);
@@ -148,16 +177,35 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
     {
         var handlerFactories = GetOrCreateDynamicHandlerFactories(eventName);
 
-        if (factory.IsInFactories(handlerFactories))
+        var added = false;
+        var shouldSubscribe = false;
+        handlerFactories.Locking(factories =>
+        {
+            if (factory.IsInFactories(factories))
+            {
+                return;
+            }
+
+            shouldSubscribe = factories.Count == 0;
+            factories.Add(factory);
+            added = true;
+        });
+
+        if (!added)
         {
             return NullDisposable.Instance;
         }
 
-        handlerFactories.Add(factory);
-
-        if (handlerFactories.Count == 1)
+        if (shouldSubscribe)
         {
-            _ = Task.Run(() => SubscribeToSubjectAsync(eventName));
+            var consumerCancellationSource = GetOrCreateConsumerCancellationSource(eventName);
+            var startupSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _ = Task.Run(() => SubscribeToSubjectAsync(eventName, consumerCancellationSource.Token, startupSignal));
+
+            if (!startupSignal.Task.Wait(TimeSpan.FromSeconds(10)))
+            {
+                Logger.LogWarning("Timed out waiting for NATS consumer startup for event: {EventName}", eventName);
+            }
         }
 
         return new DynamicEventHandlerFactoryUnregistrar(this, eventName, factory);
@@ -165,46 +213,175 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
     // ── NATS consumer ─────────────────────────────────────────────────────────
 
-    protected virtual async Task SubscribeToSubjectAsync(string eventName)
+    protected virtual async Task SubscribeToSubjectAsync(
+        string eventName,
+        CancellationToken consumerCancellationToken,
+        TaskCompletionSource startupSignal)
     {
         try
         {
             var subject = GetSubjectName(eventName);
             var consumerName = SanitizeConsumerName($"{NatsOptions.StreamName}_{eventName}");
 
-            var connection = await ConnectionPool.GetAsync(NatsOptions.ConnectionName);
-            var js = connection.CreateJetStreamContext();
+            var js = await JetStreamContextAccessor.GetContextAsync(NatsOptions.ConnectionName);
 
             await EnsureStreamExistsAsync();
 
-            var consumer = await js.CreateOrUpdateConsumerAsync(NatsOptions.StreamName, new ConsumerConfig(consumerName)
-            {
-                FilterSubject = subject,
-                AckPolicy = ConsumerConfigAckPolicy.Explicit,
-                DeliverPolicy = ConsumerConfigDeliverPolicy.All
-            });
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token, consumerCancellationToken);
+            var shutdownToken = linkedCts.Token;
 
-            _ = Task.Run(async () =>
+            while (!shutdownToken.IsCancellationRequested)
             {
-                await foreach (var msg in consumer.ConsumeAsync<byte[]>(cancellationToken: CancellationToken.None))
+                try
                 {
-                    try
+                    var consumerConfig = new ConsumerConfig(consumerName)
                     {
-                        await ProcessMessageAsync(eventName, msg);
-                        await msg.AckAsync();
+                        FilterSubject = subject,
+                        AckPolicy = ConsumerConfigAckPolicy.Explicit,
+                        DeliverPolicy = ConsumerConfigDeliverPolicy.New
+                    };
+
+                    var prefetchCount = ParsePrefetchCount(NatsOptions.PrefetchCount);
+                    if (prefetchCount.HasValue)
+                    {
+                        consumerConfig.MaxAckPending = prefetchCount.Value;
                     }
-                    catch (Exception ex)
+
+                    var consumer = await js.CreateOrUpdateConsumerAsync(NatsOptions.StreamName, consumerConfig);
+                    startupSignal.TrySetResult();
+
+                    await foreach (var msg in consumer.ConsumeAsync<byte[]>(cancellationToken: shutdownToken))
                     {
-                        Logger.LogError(ex, "Error processing NATS message for event: {EventName}", eventName);
-                        await msg.NakAsync();
+                        try
+                        {
+                            await ProcessMessageAsync(eventName, msg);
+                            await msg.AckAsync();
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.LogError(ex, "Error processing NATS message for event: {EventName}", eventName);
+                            await msg.NakAsync();
+                        }
+                    }
+
+                    if (!shutdownToken.IsCancellationRequested)
+                    {
+                        Logger.LogWarning("NATS consumer stream ended for event: {EventName}. Restarting.", eventName);
                     }
                 }
-            });
+                catch (OperationCanceledException) when (shutdownToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex, "NATS consumer loop failed for event: {EventName}. Restarting.", eventName);
+                }
+
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(5), shutdownToken);
+                }
+                catch (OperationCanceledException) when (shutdownToken.IsCancellationRequested)
+                {
+                    break;
+                }
+            }
         }
         catch (Exception ex)
         {
+            startupSignal.TrySetException(ex);
             Logger.LogError(ex, "Failed to subscribe to NATS subject for event: {EventName}", eventName);
         }
+    }
+
+    public virtual void OnApplicationShutdown(ApplicationShutdownContext context)
+    {
+        _shutdownCts.Cancel();
+    }
+
+    public virtual Task OnApplicationShutdownAsync(ApplicationShutdownContext context)
+    {
+        _shutdownCts.Cancel();
+        return Task.CompletedTask;
+    }
+
+    private static Guid? GetTenantId(NatsJSMsg<byte[]> msg)
+    {
+        var tenantIdValue = msg.Headers?.TryGetValue("Abp-Tenant-Id", out var values) == true
+            ? values.FirstOrDefault()?.ToString()
+            : null;
+
+        return Guid.TryParse(tenantIdValue, out var tenantId)
+            ? tenantId
+            : null;
+    }
+
+    private CancellationTokenSource GetOrCreateConsumerCancellationSource(string eventName)
+    {
+        return ConsumerCancellationSources.GetOrAdd(eventName, _ => new CancellationTokenSource());
+    }
+
+    private void StopConsumerIfNoHandlers(string eventName, Type? eventType = null)
+    {
+        var hasHandlers = eventType != null
+            ? HandlerFactories.TryGetValue(eventType, out var typedFactories) && typedFactories.Any()
+            : DynamicHandlerFactories.TryGetValue(eventName, out var dynamicFactories) && dynamicFactories.Any();
+
+        if (!hasHandlers)
+        {
+            StopConsumer(eventName);
+        }
+    }
+
+    private void StopConsumer(string eventName)
+    {
+        if (ConsumerCancellationSources.TryRemove(eventName, out var consumerCancellationSource))
+        {
+            consumerCancellationSource.Cancel();
+            consumerCancellationSource.Dispose();
+        }
+    }
+
+    private static TimeSpan? ParseMaxAge(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        if (TimeSpan.TryParse(value, out var duration))
+        {
+            return duration;
+        }
+
+        var trimmed = value.Trim();
+        var unit = trimmed[^1];
+        var numberPart = trimmed[..^1];
+
+        if (!double.TryParse(numberPart, out var amount))
+        {
+            return null;
+        }
+
+        return unit switch
+        {
+            's' or 'S' => TimeSpan.FromSeconds(amount),
+            'm' or 'M' => TimeSpan.FromMinutes(amount),
+            'h' or 'H' => TimeSpan.FromHours(amount),
+            'd' or 'D' => TimeSpan.FromDays(amount),
+            _ => null
+        };
+    }
+
+    private static long? ParsePrefetchCount(string? value)
+    {
+        if (!long.TryParse(value, out var prefetchCount) || prefetchCount <= 0)
+        {
+            return null;
+        }
+
+        return prefetchCount;
     }
 
     private async Task ProcessMessageAsync(string eventName, NatsJSMsg<byte[]> msg)
@@ -214,49 +391,59 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         var correlationId = msg.Headers?.TryGetValue("Abp-Correlation-Id", out var values) == true
             ? values.FirstOrDefault()?.ToString()
             : null;
+        var tenantId = GetTenantId(msg);
 
-        var eventType = EventTypes.GetOrDefault(eventName);
-
-        if (eventType != null)
+        using (CurrentTenant.Change(tenantId))
         {
-            var eventData = Serializer.Deserialize(msg.Data, eventType);
-            if (await AddToInboxAsync(null, eventName, eventType, eventData, correlationId))
-            {
-                return;
-            }
-            using (CorrelationIdProvider.Change(correlationId))
-            {
-                await TriggerHandlersDirectAsync(eventType, eventData);
-            }
-        }
-        else if (DynamicHandlerFactories.TryGetValue(eventName, out var dynamicFactories))
-        {
-            var rawData = Serializer.Deserialize<object>(msg.Data);
-            var dynamicEventData = new DynamicEventData(eventName, rawData);
+            var eventType = EventTypes.GetOrDefault(eventName);
 
-            if (await AddToInboxAsync(null, eventName, typeof(DynamicEventData), dynamicEventData, correlationId))
+            if (eventType != null)
             {
-                return;
-            }
-
-            using (CorrelationIdProvider.Change(correlationId))
-            {
-                await TriggerDistributedEventReceivedAsync(new DistributedEventReceived
+                var eventData = Serializer.Deserialize(msg.Data, eventType);
+                if (await AddToInboxAsync(null, eventName, eventType, eventData, correlationId))
                 {
-                    Source = DistributedEventSource.Direct,
-                    EventName = eventName,
-                    EventData = dynamicEventData
-                });
-
-                var exceptions = new List<Exception>();
-                foreach (var factory in dynamicFactories.ToList())
-                {
-                    await TriggerHandlerAsync(factory, typeof(DynamicEventData), dynamicEventData, exceptions);
+                    return;
                 }
 
-                if (exceptions.Count > 0)
+                using (CorrelationIdProvider.Change(correlationId))
                 {
-                    ThrowOriginalExceptions(typeof(DynamicEventData), exceptions);
+                    await TriggerHandlersDirectAsync(eventType, eventData);
+                }
+            }
+            else
+            {
+                var rawData = Serializer.Deserialize<object>(msg.Data);
+                var dynamicEventData = new DynamicEventData(eventName, rawData);
+
+                if (await AddToInboxAsync(null, eventName, typeof(DynamicEventData), dynamicEventData, correlationId))
+                {
+                    return;
+                }
+
+                using (CorrelationIdProvider.Change(correlationId))
+                {
+                    await TriggerDistributedEventReceivedAsync(new DistributedEventReceived
+                    {
+                        Source = DistributedEventSource.Direct,
+                        EventName = eventName,
+                        EventData = dynamicEventData
+                    });
+
+                    var exceptions = new List<Exception>();
+                    var dynamicFactories = DynamicHandlerFactories
+                        .Where(hf => MatchesEventName(hf.Key, eventName))
+                        .SelectMany(hf => hf.Value)
+                        .ToList();
+
+                    foreach (var factory in dynamicFactories)
+                    {
+                        await TriggerHandlerAsync(factory, typeof(DynamicEventData), dynamicEventData, exceptions);
+                    }
+
+                    if (exceptions.Count > 0)
+                    {
+                        ThrowOriginalExceptions(typeof(DynamicEventData), exceptions);
+                    }
                 }
             }
         }
@@ -281,6 +468,13 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         }
 
         await PublishToNatsAsync(eventName, body);
+
+        await TriggerDistributedEventSentAsync(new DistributedEventSent
+        {
+            Source = DistributedEventSource.Direct,
+            EventName = eventName,
+            EventData = eventData
+        });
     }
 
     public override Task PublishAsync(string eventName, object eventData, bool onUnitOfWorkComplete = true)
@@ -299,8 +493,8 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
     private async Task PublishToNatsAsync(string eventName, byte[] body, string? correlationId = null)
     {
         var subject = GetSubjectName(eventName);
-        var connection = await ConnectionPool.GetAsync(NatsOptions.ConnectionName);
-        var js = connection.CreateJetStreamContext();
+        await EnsureStreamExistsAsync();
+        var js = await JetStreamContextAccessor.GetContextAsync(NatsOptions.ConnectionName);
 
         var headers = new NATS.Client.Core.NatsHeaders();
         correlationId ??= CorrelationIdProvider.Get();
@@ -366,7 +560,10 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
     public override void Unsubscribe<TEvent>(Func<TEvent, Task> action)
     {
         Check.NotNull(action, nameof(action));
-        GetOrCreateHandlerFactories(typeof(TEvent))
+        var eventType = typeof(TEvent);
+        var eventName = EventNameAttribute.GetNameOrDefault(eventType);
+
+        GetOrCreateHandlerFactories(eventType)
             .Locking(factories => factories.RemoveAll(factory =>
             {
                 if (factory is SingleInstanceHandlerFactory singleFactory &&
@@ -376,29 +573,39 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                 }
                 return false;
             }));
+
+        StopConsumerIfNoHandlers(eventName, eventType);
     }
 
     public override void Unsubscribe(Type eventType, IEventHandler handler)
     {
+        var eventName = EventNameAttribute.GetNameOrDefault(eventType);
         GetOrCreateHandlerFactories(eventType)
             .Locking(factories => factories.RemoveAll(factory =>
                 factory is SingleInstanceHandlerFactory singleFactory &&
                 singleFactory.HandlerInstance == handler));
+
+        StopConsumerIfNoHandlers(eventName, eventType);
     }
 
     public override void Unsubscribe(Type eventType, IEventHandlerFactory factory)
     {
+        var eventName = EventNameAttribute.GetNameOrDefault(eventType);
         GetOrCreateHandlerFactories(eventType).Locking(factories => factories.Remove(factory));
+        StopConsumerIfNoHandlers(eventName, eventType);
     }
 
     public override void UnsubscribeAll(Type eventType)
     {
+        var eventName = EventNameAttribute.GetNameOrDefault(eventType);
         GetOrCreateHandlerFactories(eventType).Locking(factories => factories.Clear());
+        StopConsumer(eventName);
     }
 
     public override void Unsubscribe(string eventName, IEventHandlerFactory factory)
     {
         GetOrCreateDynamicHandlerFactories(eventName).Locking(factories => factories.Remove(factory));
+        StopConsumerIfNoHandlers(eventName);
     }
 
     public override void Unsubscribe(string eventName, IEventHandler handler)
@@ -407,11 +614,14 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
             .Locking(factories => factories.RemoveAll(factory =>
                 factory is SingleInstanceHandlerFactory singleFactory &&
                 singleFactory.HandlerInstance == handler));
+
+        StopConsumerIfNoHandlers(eventName);
     }
 
     public override void UnsubscribeAll(string eventName)
     {
         GetOrCreateDynamicHandlerFactories(eventName).Locking(factories => factories.Clear());
+        StopConsumer(eventName);
     }
 
     // ── Handler factory lookup ────────────────────────────────────────────────
@@ -423,12 +633,12 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
         foreach (var hf in HandlerFactories.Where(hf => ShouldTriggerEventForHandler(eventType, hf.Key)))
         {
-            result.Add(new EventTypeWithEventHandlerFactories(hf.Key, hf.Value));
+            result.Add(new EventTypeWithEventHandlerFactories(hf.Key, hf.Value.Locking(factories => factories.ToList())));
         }
 
         foreach (var hf in DynamicHandlerFactories.Where(hf => eventNames.Contains(hf.Key)))
         {
-            result.Add(new EventTypeWithEventHandlerFactories(typeof(DynamicEventData), hf.Value));
+            result.Add(new EventTypeWithEventHandlerFactories(typeof(DynamicEventData), hf.Value.Locking(factories => factories.ToList())));
         }
 
         return result.ToArray();
@@ -443,9 +653,9 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         }
 
         var result = new List<EventTypeWithEventHandlerFactories>();
-        foreach (var hf in DynamicHandlerFactories.Where(hf => hf.Key == eventName))
+        foreach (var hf in DynamicHandlerFactories.Where(hf => MatchesEventName(hf.Key, eventName)))
         {
-            result.Add(new EventTypeWithEventHandlerFactories(typeof(DynamicEventData), hf.Value));
+            result.Add(new EventTypeWithEventHandlerFactories(typeof(DynamicEventData), hf.Value.Locking(factories => factories.ToList())));
         }
 
         return result;
@@ -500,5 +710,37 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
     private static bool ShouldTriggerEventForHandler(Type targetEventType, Type handlerEventType)
     {
         return handlerEventType == targetEventType || handlerEventType.IsAssignableFrom(targetEventType);
+    }
+
+    private static bool MatchesEventName(string pattern, string eventName)
+    {
+        var patternParts = pattern.Split('.');
+        var eventParts = eventName.Split('.');
+
+        var eventIndex = 0;
+
+        for (var patternIndex = 0; patternIndex < patternParts.Length; patternIndex++)
+        {
+            var patternPart = patternParts[patternIndex];
+
+            if (patternPart == ">")
+            {
+                return patternIndex == patternParts.Length - 1;
+            }
+
+            if (eventIndex >= eventParts.Length)
+            {
+                return false;
+            }
+
+            if (patternPart != "*" && !string.Equals(patternPart, eventParts[eventIndex], StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            eventIndex++;
+        }
+
+        return eventIndex == eventParts.Length;
     }
 }

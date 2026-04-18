@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Threading.Tasks;
+using System.Text.Json;
 using Volo.Abp.EventBus;
 using Volo.Abp.EventBus.Distributed;
 using Xunit;
@@ -22,32 +25,32 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
     public async Task Should_Publish_And_Consume_Event()
     {
         // Arrange
-        var messageReceived = false;
+        var received = new TaskCompletionSource<TestEventData>(TaskCreationOptions.RunContinuationsAsynchronously);
         var testData = new TestEventData { Message = "Hello NATS!" };
 
         // We use a local action handler for testing
         using (var serviceScope = ServiceProvider.CreateScope())
+        using (_distributedEventBus.Subscribe<TestEventData>(async data =>
         {
-            _distributedEventBus.Subscribe<TestEventData>(async (data) =>
+            if (data.Message == "Hello NATS!")
             {
-                data.Message.ShouldBe("Hello NATS!");
-                messageReceived = true;
-                await Task.CompletedTask;
-            });
+                received.TrySetResult(data);
+            }
 
+            await Task.CompletedTask;
+        }))
+        {
             // Act
-            await _distributedEventBus.PublishAsync(testData);
-
-            // Wait for delivery (NATS is fast, but async)
             var iterations = 0;
-            while (!messageReceived && iterations < 50)
+            while (!received.Task.IsCompleted && iterations < 20)
             {
+                await _distributedEventBus.PublishAsync(testData, onUnitOfWorkComplete: false, useOutbox: false);
                 await Task.Delay(100);
                 iterations++;
             }
 
             // Assert
-            messageReceived.ShouldBeTrue();
+            (await received.Task.WaitAsync(TimeSpan.FromSeconds(10))).Message.ShouldBe("Hello NATS!");
         }
     }
 
@@ -55,22 +58,47 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
     public async Task Should_Subscribe_With_Wildcard()
     {
         // Arrange
-        var receivedCount = 0;
+        var receivedValues = new ConcurrentDictionary<int, byte>();
+        var receivedAllValues = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         
         // Subject prefix is TrueParser.Test.Events
         // This subscription should catch any events starting with TrueParser.Test.Events.Wildcard
-        _distributedEventBus.Subscribe("Wildcard.*", new WildcardTestHandler(() => receivedCount++));
+        using var subscription = _distributedEventBus.Subscribe("Wildcard.*", new WildcardTestHandler(eventData =>
+        {
+            var value = eventData.Data switch
+            {
+                JsonElement jsonElement when jsonElement.ValueKind == JsonValueKind.Object
+                    && (jsonElement.TryGetProperty("Value", out var valueProperty)
+                        || jsonElement.TryGetProperty("value", out valueProperty))
+                    && valueProperty.ValueKind == JsonValueKind.Number
+                    => valueProperty.GetInt32(),
+                _ => 0
+            };
+            receivedValues.TryAdd(value, 0);
+
+            if (receivedValues.Count >= 2)
+            {
+                receivedAllValues.TrySetResult();
+            }
+        }));
 
         // Act
-        await _distributedEventBus.PublishAsync("Wildcard.First", new { Value = 1 });
-        await _distributedEventBus.PublishAsync("Wildcard.Second", new { Value = 2 });
-        await _distributedEventBus.PublishAsync("NotWildcard.Something", new { Value = 3 });
-
-        // Wait
-        await Task.Delay(1000);
+        var iterations = 0;
+        while (!receivedAllValues.Task.IsCompleted && iterations < 20)
+        {
+            await _distributedEventBus.PublishAsync(typeof(DynamicEventData), new DynamicEventData("Wildcard.First", new { Value = 1 }), onUnitOfWorkComplete: false, useOutbox: false);
+            await _distributedEventBus.PublishAsync(typeof(DynamicEventData), new DynamicEventData("Wildcard.Second", new { Value = 2 }), onUnitOfWorkComplete: false, useOutbox: false);
+            await _distributedEventBus.PublishAsync(typeof(DynamicEventData), new DynamicEventData("NotWildcard.Something", new { Value = 3 }), onUnitOfWorkComplete: false, useOutbox: false);
+            await Task.Delay(100);
+            iterations++;
+        }
 
         // Assert
-        receivedCount.ShouldBe(2);
+        await receivedAllValues.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        receivedValues.ContainsKey(1).ShouldBeTrue();
+        receivedValues.ContainsKey(2).ShouldBeTrue();
+        receivedValues.ContainsKey(3).ShouldBeFalse();
     }
 }
 
@@ -82,13 +110,13 @@ public class TestEventData
 
 public class WildcardTestHandler : IDistributedEventHandler<DynamicEventData>
 {
-    private readonly Action _onReceived;
+    private readonly Action<DynamicEventData> _onReceived;
 
-    public WildcardTestHandler(Action onReceived) => _onReceived = onReceived;
+    public WildcardTestHandler(Action<DynamicEventData> onReceived) => _onReceived = onReceived;
 
     public Task HandleEventAsync(DynamicEventData eventData)
     {
-        _onReceived();
+        _onReceived(eventData);
         return Task.CompletedTask;
     }
 }
