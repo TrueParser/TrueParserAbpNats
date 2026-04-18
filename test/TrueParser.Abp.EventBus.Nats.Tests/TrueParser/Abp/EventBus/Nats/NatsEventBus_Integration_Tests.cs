@@ -25,7 +25,7 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
         _distributedEventBus = GetRequiredService<IDistributedEventBus>();
     }
 
-    [Fact]
+    [NatsFact]
     public async Task Should_Publish_And_Consume_Event()
     {
         // Arrange
@@ -58,7 +58,7 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
         }
     }
 
-    [Fact]
+    [NatsFact]
     public async Task Should_Subscribe_With_Wildcard()
     {
         // Arrange
@@ -104,7 +104,7 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
         receivedValues.ContainsKey(2).ShouldBeTrue();
         receivedValues.ContainsKey(3).ShouldBeFalse();
     }
-    [Fact]
+    [NatsFact]
     public async Task New_Consumer_Should_Receive_Messages_Retained_By_Other_Consumers_Interest()
     {
         // Scenario 2 from R5 analysis:

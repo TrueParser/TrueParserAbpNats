@@ -20,7 +20,7 @@ public class NatsEventBus_ThreadSafety_Tests : NatsEventBusTestBase
         _distributedEventBus = GetRequiredService<IDistributedEventBus>();
     }
 
-    [Fact]
+    [NatsFact]
     public async Task Concurrent_Subscribe_And_Unsubscribe_On_Typed_Event_Should_Not_Throw()
     {
         var eventName = $"ThreadSafety.Typed.{Guid.NewGuid():N}";
@@ -66,7 +66,7 @@ public class NatsEventBus_ThreadSafety_Tests : NatsEventBusTestBase
         errors.ShouldBeEmpty();
     }
 
-    [Fact]
+    [NatsFact]
     public async Task Concurrent_Subscribe_And_Publish_On_Dynamic_Event_Should_Deliver_Without_Races()
     {
         var eventName = $"ThreadSafety.Dynamic.{Guid.NewGuid():N}";
@@ -132,7 +132,7 @@ public class NatsEventBus_ThreadSafety_Tests : NatsEventBusTestBase
         }
     }
 
-    [Fact]
+    [NatsFact]
     public async Task Concurrent_Dynamic_Handler_Mutation_While_Publishing_Should_Not_Throw()
     {
         var eventName = $"ThreadSafety.Mutation.{Guid.NewGuid():N}";
@@ -193,7 +193,7 @@ public class NatsEventBus_ThreadSafety_Tests : NatsEventBusTestBase
         received.ShouldBeGreaterThan(0);
     }
 
-    [Fact]
+    [NatsFact]
     public async Task Concurrent_Subscribe_On_Typed_Event_Should_Deliver_Events()
     {
         var received = new ConcurrentBag<string>();
