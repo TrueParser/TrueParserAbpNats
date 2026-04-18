@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace />
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Volo.Abp.EventBus" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TrueParser.Abp.Nats\TrueParser.Abp.Nats.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TrueParser.Abp.EventBus.Nats/TrueParser.Abp.EventBus.Nats.csproj" />
+    <Project Path="src/TrueParser.Abp.Nats/TrueParser.Abp.Nats.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/TrueParser.Abp.EventBus.Nats.Tests/TrueParser.Abp.EventBus.Nats.Tests.csproj" />
+  </Folder>
+</Solution>

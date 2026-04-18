@@ -1,0 +1,32 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- ABP Framework -->
+    <PackageVersion Include="Volo.Abp.EventBus" Version="10.3.0" />
+    <PackageVersion Include="Volo.Abp.Json" Version="10.3.0" />
+    <PackageVersion Include="Volo.Abp.Threading" Version="10.3.0" />
+    <PackageVersion Include="Volo.Abp.Core" Version="10.3.0" />
+    <PackageVersion Include="Volo.Abp.TestBase" Version="10.3.0" />
+    <PackageVersion Include="Volo.Abp.Autofac" Version="10.3.0" />
+
+    <!-- NATS -->
+    <PackageVersion Include="NATS.Net" Version="2.5.3" />
+
+    <!-- Microsoft Extensions -->
+    <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.0" />
+
+    <!-- Test -->
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.9.0" />
+    <PackageVersion Include="xunit" Version="2.7.0" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="2.5.7" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.2" />
+    <PackageVersion Include="NSubstitute" Version="5.1.0" />
+    <PackageVersion Include="Shouldly" Version="4.2.1" />
+    <PackageVersion Include="Roslynator.Analyzers" Version="4.12.9" />
+  </ItemGroup>
+</Project>
