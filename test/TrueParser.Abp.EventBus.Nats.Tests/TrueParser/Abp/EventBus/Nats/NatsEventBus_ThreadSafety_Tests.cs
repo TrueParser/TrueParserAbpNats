@@ -193,6 +193,63 @@ public class NatsEventBus_ThreadSafety_Tests : NatsEventBusTestBase
         received.ShouldBeGreaterThan(0);
     }
 
+    [Fact]
+    public async Task Concurrent_Subscribe_On_Typed_Event_Should_Deliver_Events()
+    {
+        var received = new ConcurrentBag<string>();
+        var readySignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var subscriptions = new ConcurrentBag<IDisposable>();
+        var errors = new ConcurrentQueue<Exception>();
+
+        // Subscribe 4 concurrent handlers — only one NATS consumer is created; all
+        // handlers are invoked locally when the consumer delivers the message.
+        await RunConcurrentAsync(4, async _ =>
+        {
+            try
+            {
+                var subscription = _distributedEventBus.Subscribe<ThreadSafetyDeliveryEvent>(data =>
+                {
+                    received.Add(data.Value ?? "");
+                    if (received.Count >= 1)
+                    {
+                        readySignal.TrySetResult();
+                    }
+                    return Task.CompletedTask;
+                });
+                subscriptions.Add(subscription);
+            }
+            catch (Exception ex)
+            {
+                errors.Enqueue(ex);
+            }
+            await Task.CompletedTask;
+        });
+
+        errors.ShouldBeEmpty();
+
+        // Allow NATS consumer to become ready before publishing.
+        await Task.Delay(1000);
+
+        var iterations = 0;
+        while (!readySignal.Task.IsCompleted && iterations < 20)
+        {
+            await _distributedEventBus.PublishAsync(
+                new ThreadSafetyDeliveryEvent { Value = "concurrent-delivery" },
+                onUnitOfWorkComplete: false,
+                useOutbox: false);
+            await Task.Delay(100);
+            iterations++;
+        }
+
+        await readySignal.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        received.Count.ShouldBeGreaterThan(0);
+
+        foreach (var subscription in subscriptions)
+        {
+            subscription.Dispose();
+        }
+    }
+
     private static async Task RunConcurrentAsync(int count, Func<int, Task> action)
     {
         var tasks = Enumerable.Range(0, count).Select(action);
@@ -202,6 +259,12 @@ public class NatsEventBus_ThreadSafety_Tests : NatsEventBusTestBase
 
 [EventName("ThreadSafetyTypedEvent")]
 public class ThreadSafetyTypedEvent
+{
+    public string? Value { get; set; }
+}
+
+[EventName("ThreadSafetyDeliveryEvent")]
+public class ThreadSafetyDeliveryEvent
 {
     public string? Value { get; set; }
 }

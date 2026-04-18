@@ -213,10 +213,8 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
             var subject = GetSubjectName(eventName);
             var consumerName = SanitizeConsumerName($"{NatsOptions.StreamName}_{eventName}");
 
-            var js = await JetStreamContextAccessor.GetContextAsync(NatsOptions.ConnectionName);
-
-            await EnsureStreamExistsAsync();
-
+            // CreateLinkedTokenSource can throw ObjectDisposedException if _shutdownCts was already disposed.
+            // That is caught by the outer catch below, which signals startup complete and exits.
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token, consumerCancellationToken);
             var shutdownToken = linkedCts.Token;
 
@@ -224,6 +222,11 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
             {
                 try
                 {
+                    // Resolve js and ensure stream inside the retry loop so transient
+                    // connection failures are retried rather than aborting the consumer.
+                    var js = await JetStreamContextAccessor.GetContextAsync(NatsOptions.ConnectionName);
+                    await EnsureStreamExistsAsync();
+
                     var consumerConfig = new ConsumerConfig(consumerName)
                     {
                         FilterSubject = subject,
@@ -280,19 +283,25 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         }
         catch (Exception ex)
         {
-            startupSignal.TrySetException(ex);
+            // Signal startup complete even on failure — a consumer error must not prevent
+            // the application from starting. The consumer loop above retries on transient
+            // errors; this outer catch only fires for unrecoverable setup failures (e.g.
+            // _shutdownCts already disposed during a concurrent shutdown).
+            startupSignal.TrySetResult();
             Logger.LogError(ex, "Failed to subscribe to NATS subject for event: {EventName}", eventName);
         }
     }
 
     public virtual void OnApplicationShutdown(ApplicationShutdownContext context)
     {
-        _shutdownCts.Cancel();
+        try { _shutdownCts.Cancel(); }
+        catch (ObjectDisposedException) { }
     }
 
     public virtual Task OnApplicationShutdownAsync(ApplicationShutdownContext context)
     {
-        _shutdownCts.Cancel();
+        try { _shutdownCts.Cancel(); }
+        catch (ObjectDisposedException) { }
         return Task.CompletedTask;
     }
 
@@ -362,7 +371,14 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
             return;
         }
 
-        await Task.WhenAll(startupTasks);
+        try
+        {
+            await Task.WhenAll(startupTasks).WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        catch (TimeoutException)
+        {
+            Logger.LogWarning("Timed out waiting for NATS consumers to start after 30 seconds. Continuing application startup.");
+        }
     }
 
     private void StopConsumerIfNoHandlers(string eventName, Type? eventType = null)

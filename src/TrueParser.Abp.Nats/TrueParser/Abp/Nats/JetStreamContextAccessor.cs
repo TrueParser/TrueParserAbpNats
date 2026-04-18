@@ -20,6 +20,10 @@ public class JetStreamContextAccessor : IJetStreamContextAccessor, ISingletonDep
     public async ValueTask<INatsJSContext> GetContextAsync(string? connectionName = null)
     {
         var cacheKey = connectionName ?? "Default";
+        if (_contexts.TryGetValue(cacheKey, out var existing))
+        {
+            return existing.Value;
+        }
         var connection = await _connectionPool.GetAsync(connectionName);
         return _contexts.GetOrAdd(
             cacheKey,
