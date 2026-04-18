@@ -1,101 +1,144 @@
 # TrueParser.Abp.Nats
 
-[![NuGet version](https://img.shields.io/nuget/v/TrueParser.Abp.Nats.svg?style=flat-square)](https://www.nuget.org/packages/TrueParser.Abp.Nats)
-[![License](https://img.shields.io/badge/license-LGPL--3.0-blue.svg?style=flat-square)](https://github.com/trueparser/trueparser-abp-nats/blob/main/LICENSE)
+[![NuGet](https://img.shields.io/nuget/v/TrueParser.Abp.EventBus.Nats.svg?style=flat-square&label=TrueParser.Abp.EventBus.Nats)](https://www.nuget.org/packages/TrueParser.Abp.EventBus.Nats)
+[![NuGet](https://img.shields.io/nuget/v/TrueParser.Abp.Nats.svg?style=flat-square&label=TrueParser.Abp.Nats)](https://www.nuget.org/packages/TrueParser.Abp.Nats)
+[![Build](https://img.shields.io/github/actions/workflow/status/trueparser/trueparser-abp-nats/ci.yml?style=flat-square)](https://github.com/trueparser/trueparser-abp-nats/actions)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
+[![ABP](https://img.shields.io/badge/ABP-10.x-brightgreen?style=flat-square)](https://abp.io)
+[![.NET](https://img.shields.io/badge/.NET-10-purple?style=flat-square)](https://dotnet.microsoft.com)
 
-A high-performance **NATS JetStream** provider for the **ABP Framework** Distributed Event Bus. Built with the modern `NATS.Net` (v2) client for superior speed, reliability, and low-latency messaging.
-
----
-
-## 🚀 Features
-
-- **Blazing Fast**: Leverages the high-performance `NATS.Net` (v2) client with full `async/await` support.
-- **Native JetStream**: Uses JetStream for persistent, durable, and reliable event delivery.
-- **Durable Consumers**: Automatically creates and manages durable pull-consumers for all ABP event handlers.
-- **Ordered Delivery**: Native support for message ordering and exactly-once delivery semantics via JetStream.
-- **Seamless Integration**: Drop-in replacement for RabbitMQ or Kafka in any ABP application.
-- **Multi-Tenant Ready**: Automatically handles ABP tenant headers across subjects.
-- **Centralized Management**: Configure through ABP's options pattern or `appsettings.json`.
+**NATS JetStream** distributed event bus for the **ABP Framework** — a drop-in replacement for `Volo.Abp.EventBus.RabbitMQ` with minimal migration effort.
 
 ---
 
-## 📦 Installation
+## Why NATS?
 
-Install the NuGet packages:
+| | RabbitMQ | NATS JetStream |
+|---|---|---|
+| Latency | ~1ms | ~100µs |
+| Throughput | ~50K msg/s | ~10M msg/s |
+| Operations overhead | High (exchanges, queues, bindings) | Low (subjects, streams) |
+| At-least-once delivery | Yes | Yes |
+| Fan-out / wildcard | Via exchanges | Native subject wildcards |
+| Cloud-native | Requires plugins | Built-in |
+
+---
+
+## Packages
+
+| Package | Purpose |
+|---|---|
+| `TrueParser.Abp.Nats` | Connection pool, JetStream context, health checks |
+| `TrueParser.Abp.EventBus.Nats` | Distributed event bus implementation |
+
+Most applications only need `TrueParser.Abp.EventBus.Nats` — it pulls in `TrueParser.Abp.Nats` automatically.
+
+---
+
+## Quick Start
+
+### 1. Install
 
 ```bash
-dotnet add package TrueParser.Abp.Nats
 dotnet add package TrueParser.Abp.EventBus.Nats
 ```
 
----
-
-## 🛠️ Configuration
-
-### 1. Register the Module
-
-Add the `TrueParserAbpEventBusNatsModule` to your project dependencies:
+### 2. Register the module
 
 ```csharp
 [DependsOn(typeof(TrueParserAbpEventBusNatsModule))]
-public class MyModule : AbpModule
-{
-    // ...
-}
+public class MyModule : AbpModule { }
 ```
 
-### 2. Update `appsettings.json`
-
-Add the NATS configuration section:
+### 3. Configure `appsettings.json`
 
 ```json
 {
   "TrueParser": {
     "Nats": {
       "Connections": "nats://localhost:4222",
-      "ClientName": "MyProductService"
+      "ClientName": "my-service"
     },
     "EventBus": {
       "Nats": {
-        "StreamName": "TrueParserEvents",
-        "SubjectPrefix": "TrueParser.Events"
+        "StreamName": "MyAppEvents",
+        "SubjectPrefix": "MyApp.Events"
       }
     }
   }
 }
 ```
 
----
+### 4. Use — identical to any ABP event bus
 
-## 📂 Project Structure
+```csharp
+// Publish
+await _distributedEventBus.PublishAsync(new OrderPlacedEto { OrderId = id });
 
-- **`TrueParser.Abp.Nats`**: Base infrastructure for NATS connection management and JetStream accessors.
-- **`TrueParser.Abp.EventBus.Nats`**: The ABP Distributed Event Bus implementation.
-
----
-
-## 🧪 Running Tests
-
-Tests require a local NATS server running with JetStream enabled:
-
-```bash
-nats-server -js
+// Handle
+public class OrderPlacedHandler : IDistributedEventHandler<OrderPlacedEto>
+{
+    public async Task HandleEventAsync(OrderPlacedEto eventData)
+    {
+        // process...
+    }
+}
 ```
 
-Then run the integration tests:
+---
+
+## Migrating from RabbitMQ
+
+Only 3 things change — your event handlers and publishers are untouched:
+
+```diff
+- dotnet add package Volo.Abp.EventBus.RabbitMQ
++ dotnet add package TrueParser.Abp.EventBus.Nats
+```
+
+```diff
+- [DependsOn(typeof(AbpEventBusRabbitMqModule))]
++ [DependsOn(typeof(TrueParserAbpEventBusNatsModule))]
+```
+
+```diff
+- "RabbitMQ": { "EventBus": { "ExchangeName": "MyExchange" } }
++ "TrueParser": {
++   "Nats": { "Connections": "nats://localhost:4222" },
++   "EventBus": { "Nats": { "StreamName": "MyAppEvents" } }
++ }
+```
+
+---
+
+## Requirements
+
+- NATS Server **2.10+** with JetStream enabled (`nats-server -js`)
+- ABP Framework **10.x**
+- .NET **10**
+
+---
+
+## Running Tests
 
 ```bash
+# Start NATS with JetStream
+nats-server -js
+
+# Run integration tests
 dotnet test test/TrueParser.Abp.EventBus.Nats.Tests
 ```
 
 ---
 
-## ⚖️ License
+## Documentation
 
-The `TrueParser.Abp.Nats` library is licensed under the **GNU Lesser General Public License v3 (LGPLv3)**. See the [LICENSE](./LICENSE) file for the full text.
+Full configuration reference, advanced patterns, and architecture details are in the [Wiki](./docs/wiki.md).
 
 ---
 
-<p align="center">
-  Built with ❤️ by the TrueParser Team
-</p>
+## License
+
+MIT — see [LICENSE](./LICENSE).
+
+<p align="center">Built by the TrueParser team</p>
