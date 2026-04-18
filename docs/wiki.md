@@ -217,45 +217,64 @@ public class MyService
 
 ### Step-by-step
 
-**Step 1 — swap packages**
+**Step 1 - swap packages**
 
 ```bash
 dotnet remove package Volo.Abp.EventBus.RabbitMQ
 dotnet add package TrueParser.Abp.EventBus.Nats
 ```
 
-**Step 2 — swap module dependency**
+**Step 2 - swap module dependency**
 
-```diff
-- [DependsOn(typeof(AbpEventBusRabbitMqModule))]
-+ [DependsOn(typeof(TrueParserAbpEventBusNatsModule))]
-  public class MyModule : AbpModule { }
+**Before**
+
+```csharp
+[DependsOn(typeof(AbpEventBusRabbitMqModule))]
+public class MyModule : AbpModule { }
 ```
 
-**Step 3 — update `appsettings.json`**
+**After**
 
-```diff
-- "RabbitMQ": {
--   "Connections": {
--     "Default": { "HostName": "localhost" }
--   },
--   "EventBus": {
--     "ClientName": "MyService",
--     "ExchangeName": "MyExchange"
--   }
-- }
-+ "TrueParser": {
-+   "Nats": {
-+     "Connections": "nats://localhost:4222",
-+     "ClientName": "my-service"
-+   },
-+   "EventBus": {
-+     "Nats": {
-+       "StreamName": "MyAppEvents",
-+       "SubjectPrefix": "MyApp.Events"
-+     }
-+   }
-+ }
+```csharp
+[DependsOn(typeof(TrueParserAbpEventBusNatsModule))]
+public class MyModule : AbpModule { }
+```
+
+**Step 3 - update `appsettings.json`**
+
+**Before**
+
+```json
+{
+  "RabbitMQ": {
+    "Connections": {
+      "Default": { "HostName": "localhost" }
+    },
+    "EventBus": {
+      "ClientName": "MyService",
+      "ExchangeName": "MyExchange"
+    }
+  }
+}
+```
+
+**After**
+
+```json
+{
+  "TrueParser": {
+    "Nats": {
+      "Connections": "nats://localhost:4222",
+      "ClientName": "my-service"
+    },
+    "EventBus": {
+      "Nats": {
+        "StreamName": "MyAppEvents",
+        "SubjectPrefix": "MyApp.Events"
+      }
+    }
+  }
+}
 ```
 
 **Step 4 — nothing else.** All `IDistributedEventBus` usages, event handler classes, ETO classes, and `[EventHandler]` attributes stay identical.

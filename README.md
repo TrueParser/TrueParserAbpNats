@@ -3,7 +3,7 @@
 [![NuGet](https://img.shields.io/nuget/v/TrueParser.Abp.EventBus.Nats.svg?style=flat-square&label=TrueParser.Abp.EventBus.Nats)](https://www.nuget.org/packages/TrueParser.Abp.EventBus.Nats)
 [![NuGet](https://img.shields.io/nuget/v/TrueParser.Abp.Nats.svg?style=flat-square&label=TrueParser.Abp.Nats)](https://www.nuget.org/packages/TrueParser.Abp.Nats)
 [![Build](https://img.shields.io/github/actions/workflow/status/trueparser/trueparser-abp-nats/ci.yml?style=flat-square)](https://github.com/trueparser/trueparser-abp-nats/actions)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
+[![License: LGPL v3](https://img.shields.io/badge/License-LGPL%20v3-blue.svg?style=flat-square)](./LICENSE)
 [![ABP](https://img.shields.io/badge/ABP-10.x-brightgreen?style=flat-square)](https://abp.io)
 [![.NET](https://img.shields.io/badge/.NET-10-purple?style=flat-square)](https://dotnet.microsoft.com)
 
@@ -89,24 +89,50 @@ public class OrderPlacedHandler : IDistributedEventHandler<OrderPlacedEto>
 
 ## Migrating from RabbitMQ
 
-Only 3 things change — your event handlers and publishers are untouched:
+Only 3 things change - your event handlers and publishers are untouched:
 
-```diff
-- dotnet add package Volo.Abp.EventBus.RabbitMQ
-+ dotnet add package TrueParser.Abp.EventBus.Nats
+1. Replace `Volo.Abp.EventBus.RabbitMQ` with `TrueParser.Abp.EventBus.Nats`.
+2. Swap the module dependency.
+3. Move configuration to `TrueParser:Nats` and `TrueParser:EventBus:Nats`.
+
+```csharp
+[DependsOn(typeof(TrueParserAbpEventBusNatsModule))]
+public class MyModule : AbpModule { }
 ```
 
-```diff
-- [DependsOn(typeof(AbpEventBusRabbitMqModule))]
-+ [DependsOn(typeof(TrueParserAbpEventBusNatsModule))]
+**Before**
+
+```json
+{
+  "RabbitMQ": {
+    "Connections": {
+      "Default": { "HostName": "localhost" }
+    },
+    "EventBus": {
+      "ClientName": "MyService",
+      "ExchangeName": "MyExchange"
+    }
+  }
+}
 ```
 
-```diff
-- "RabbitMQ": { "EventBus": { "ExchangeName": "MyExchange" } }
-+ "TrueParser": {
-+   "Nats": { "Connections": "nats://localhost:4222" },
-+   "EventBus": { "Nats": { "StreamName": "MyAppEvents" } }
-+ }
+**After**
+
+```json
+{
+  "TrueParser": {
+    "Nats": {
+      "Connections": "nats://localhost:4222",
+      "ClientName": "my-service"
+    },
+    "EventBus": {
+      "Nats": {
+        "StreamName": "MyAppEvents",
+        "SubjectPrefix": "MyApp.Events"
+      }
+    }
+  }
+}
 ```
 
 ---
@@ -139,6 +165,6 @@ Full configuration reference, advanced patterns, and architecture details are in
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+LGPL-3.0 — see [LICENSE](./LICENSE).
 
 <p align="center">Built by the TrueParser team</p>
