@@ -15,6 +15,6 @@ public class TrueParserAbpNatsModule : AbpModule
         Configure<AbpNatsOptions>(configuration.GetSection("TrueParser:Nats"));
 
         context.Services.AddSingleton<INatsConnectionPool, NatsConnectionPool>();
-        context.Services.AddSingleton<NatsHealthCheck>();
+        context.Services.AddHealthChecks().AddCheck<NatsHealthCheck>("nats");
     }
 }

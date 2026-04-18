@@ -27,7 +27,7 @@ namespace TrueParser.Abp.EventBus.Nats;
 
 [Dependency(ReplaceServices = true)]
 [ExposeServices(typeof(IDistributedEventBus), typeof(NatsDistributedEventBus))]
-public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDependency, IOnApplicationShutdown
+public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDependency, IOnApplicationShutdown, IDisposable
 {
     protected NatsDistributedEventBusOptions NatsOptions { get; }
     protected IJetStreamContextAccessor JetStreamContextAccessor { get; }
@@ -38,10 +38,12 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
     protected ConcurrentDictionary<string, List<IEventHandlerFactory>> DynamicHandlerFactories { get; }
     protected ConcurrentDictionary<string, Type> EventTypes { get; }
     protected ConcurrentDictionary<string, CancellationTokenSource> ConsumerCancellationSources { get; }
+    protected ConcurrentDictionary<string, TaskCompletionSource> ConsumerStartupSignals { get; }
 
     private volatile bool _streamCreated;
     private readonly SemaphoreSlim _streamSemaphore = new(1, 1);
     private readonly CancellationTokenSource _shutdownCts = new();
+    private int _disposed;
 
     public NatsDistributedEventBus(
         IOptions<NatsDistributedEventBusOptions> natsOptions,
@@ -77,12 +79,14 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         DynamicHandlerFactories = new ConcurrentDictionary<string, List<IEventHandlerFactory>>();
         EventTypes = new ConcurrentDictionary<string, Type>();
         ConsumerCancellationSources = new ConcurrentDictionary<string, CancellationTokenSource>();
+        ConsumerStartupSignals = new ConcurrentDictionary<string, TaskCompletionSource>();
     }
 
     public virtual async Task InitializeAsync()
     {
         await EnsureStreamExistsAsync();
         SubscribeHandlers(AbpDistributedEventBusOptions.Handlers);
+        await WaitForConsumerStartupsAsync();
     }
 
     protected virtual async Task EnsureStreamExistsAsync()
@@ -158,14 +162,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         if (shouldSubscribe)
         {
             var eventName = EventNameAttribute.GetNameOrDefault(eventType);
-            var consumerCancellationSource = GetOrCreateConsumerCancellationSource(eventName);
-            var startupSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            _ = Task.Run(() => SubscribeToSubjectAsync(eventName, consumerCancellationSource.Token, startupSignal));
-
-            if (!startupSignal.Task.Wait(TimeSpan.FromSeconds(10)))
-            {
-                Logger.LogWarning("Timed out waiting for NATS consumer startup for event: {EventName}", eventName);
-            }
+            StartConsumer(eventName);
         }
 
         return new EventHandlerFactoryUnregistrar(this, eventType, factory);
@@ -198,14 +195,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
         if (shouldSubscribe)
         {
-            var consumerCancellationSource = GetOrCreateConsumerCancellationSource(eventName);
-            var startupSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            _ = Task.Run(() => SubscribeToSubjectAsync(eventName, consumerCancellationSource.Token, startupSignal));
-
-            if (!startupSignal.Task.Wait(TimeSpan.FromSeconds(10)))
-            {
-                Logger.LogWarning("Timed out waiting for NATS consumer startup for event: {EventName}", eventName);
-            }
+            StartConsumer(eventName);
         }
 
         return new DynamicEventHandlerFactoryUnregistrar(this, eventName, factory);
@@ -306,6 +296,28 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         return Task.CompletedTask;
     }
 
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        _shutdownCts.Cancel();
+
+        foreach (var kvp in ConsumerCancellationSources.ToArray())
+        {
+            if (ConsumerCancellationSources.TryRemove(kvp.Key, out var consumerCancellationSource))
+            {
+                consumerCancellationSource.Cancel();
+                consumerCancellationSource.Dispose();
+            }
+        }
+
+        _shutdownCts.Dispose();
+        _streamSemaphore.Dispose();
+    }
+
     private static Guid? GetTenantId(NatsJSMsg<byte[]> msg)
     {
         var tenantIdValue = msg.Headers?.TryGetValue("Abp-Tenant-Id", out var values) == true
@@ -322,11 +334,42 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         return ConsumerCancellationSources.GetOrAdd(eventName, _ => new CancellationTokenSource());
     }
 
+    private void StartConsumer(string eventName)
+    {
+        var consumerCancellationSource = GetOrCreateConsumerCancellationSource(eventName);
+        var startupSignal = ConsumerStartupSignals.GetOrAdd(
+            eventName,
+            _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+
+        startupSignal.Task.ContinueWith(
+            task =>
+            {
+                if (task.IsFaulted && task.Exception != null)
+                {
+                    Logger.LogError(task.Exception, "NATS consumer startup failed for event: {EventName}", eventName);
+                }
+            },
+            TaskScheduler.Default);
+
+        _ = Task.Run(() => SubscribeToSubjectAsync(eventName, consumerCancellationSource.Token, startupSignal));
+    }
+
+    private async Task WaitForConsumerStartupsAsync()
+    {
+        var startupTasks = ConsumerStartupSignals.Values.Select(signal => signal.Task).ToArray();
+        if (startupTasks.Length == 0)
+        {
+            return;
+        }
+
+        await Task.WhenAll(startupTasks);
+    }
+
     private void StopConsumerIfNoHandlers(string eventName, Type? eventType = null)
     {
         var hasHandlers = eventType != null
-            ? HandlerFactories.TryGetValue(eventType, out var typedFactories) && typedFactories.Any()
-            : DynamicHandlerFactories.TryGetValue(eventName, out var dynamicFactories) && dynamicFactories.Any();
+            ? HandlerFactories.TryGetValue(eventType, out var typedFactories) && typedFactories.Locking(factories => factories.Any())
+            : DynamicHandlerFactories.TryGetValue(eventName, out var dynamicFactories) && dynamicFactories.Locking(factories => factories.Any());
 
         if (!hasHandlers)
         {
@@ -341,6 +384,8 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
             consumerCancellationSource.Cancel();
             consumerCancellationSource.Dispose();
         }
+
+        ConsumerStartupSignals.TryRemove(eventName, out _);
     }
 
     private static TimeSpan? ParseMaxAge(string? value)
@@ -432,7 +477,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                     var exceptions = new List<Exception>();
                     var dynamicFactories = DynamicHandlerFactories
                         .Where(hf => MatchesEventName(hf.Key, eventName))
-                        .SelectMany(hf => hf.Value)
+                        .SelectMany(hf => hf.Value.Locking(factories => factories.ToList()))
                         .ToList();
 
                     foreach (var factory in dynamicFactories)
