@@ -2,7 +2,7 @@
 
 [![NuGet](https://img.shields.io/nuget/v/TrueParser.Abp.EventBus.Nats.svg?style=flat-square&label=TrueParser.Abp.EventBus.Nats)](https://www.nuget.org/packages/TrueParser.Abp.EventBus.Nats)
 [![NuGet](https://img.shields.io/nuget/v/TrueParser.Abp.Nats.svg?style=flat-square&label=TrueParser.Abp.Nats)](https://www.nuget.org/packages/TrueParser.Abp.Nats)
-[![Build](https://img.shields.io/github/actions/workflow/status/trueparser/trueparser-abp-nats/ci.yml?style=flat-square)](https://github.com/trueparser/trueparser-abp-nats/actions)
+[![Build](https://img.shields.io/github/actions/workflow/status/trueparser/trueparser-abp-nats/publish-package.yml?style=flat-square)](https://github.com/trueparser/trueparser-abp-nats/actions)
 [![License: LGPL v3](https://img.shields.io/badge/License-LGPL%20v3-blue.svg?style=flat-square)](./LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10-purple?style=flat-square)](https://dotnet.microsoft.com)
 
