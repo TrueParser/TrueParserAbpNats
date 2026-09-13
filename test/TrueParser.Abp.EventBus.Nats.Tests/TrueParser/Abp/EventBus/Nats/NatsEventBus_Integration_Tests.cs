@@ -1522,7 +1522,7 @@ public class TestEventHandler : IDistributedEventHandler<TestEventData>
     }
 }
 
-public sealed class CapturingNatsDistributedEventBus : NatsDistributedEventBus
+public class CapturingNatsDistributedEventBus : NatsDistributedEventBus
 {
     public string? LastMessageId { get; private set; }
     public string? LastCorrelationId { get; private set; }
@@ -1600,6 +1600,54 @@ public sealed class CapturingNatsDistributedEventBus : NatsDistributedEventBus
         return (string)typeof(NatsDistributedEventBus)
             .GetMethod("GetConsumerName", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
             .Invoke(this, [eventName])!;
+    }
+}
+
+public sealed class FaultInjectingNatsDistributedEventBus : CapturingNatsDistributedEventBus
+{
+    public FaultInjectingNatsDistributedEventBus(
+        IOptions<NatsDistributedEventBusOptions> natsOptions,
+        IJetStreamContextAccessor jetStreamContextAccessor,
+        INatsEventSerializer serializer,
+        IServiceScopeFactory serviceScopeFactory,
+        IOptions<AbpDistributedEventBusOptions> distributedEventBusOptions,
+        ICurrentTenant currentTenant,
+        IUnitOfWorkManager unitOfWorkManager,
+        IGuidGenerator guidGenerator,
+        IClock clock,
+        IEventHandlerInvoker eventHandlerInvoker,
+        ILocalEventBus localEventBus,
+        ICorrelationIdProvider correlationIdProvider,
+        ILogger<NatsDistributedEventBus> logger)
+        : base(
+            natsOptions,
+            jetStreamContextAccessor,
+            serializer,
+            serviceScopeFactory,
+            distributedEventBusOptions,
+            currentTenant,
+            unitOfWorkManager,
+            guidGenerator,
+            clock,
+            eventHandlerInvoker,
+            localEventBus,
+            correlationIdProvider,
+            logger)
+    {
+    }
+
+    public Guid? FailOnId { get; set; }
+    public List<Guid> AttemptedIds { get; } = new();
+
+    public override Task PublishFromOutboxAsync(OutgoingEventInfo outgoingEvent, OutboxConfig outboxConfig)
+    {
+        AttemptedIds.Add(outgoingEvent.Id);
+        if (FailOnId == outgoingEvent.Id)
+        {
+            throw new InvalidOperationException("Injected outbox publish failure.");
+        }
+
+        return base.PublishFromOutboxAsync(outgoingEvent, outboxConfig);
     }
 }
 

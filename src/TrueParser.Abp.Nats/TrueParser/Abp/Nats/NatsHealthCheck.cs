@@ -22,15 +22,17 @@ public class NatsHealthCheck : IHealthCheck
         {
             var connection = await _connectionPool.GetAsync();
             
-            // Check connection status
+            // A freshly created NATS.Net connection may still be Connecting until
+            // its first request is made. Probe JetStream before evaluating the
+            // resulting connection state so a valid fresh connection is not
+            // reported unhealthy prematurely.
+            var js = connection.CreateJetStreamContext();
+            await js.GetAccountInfoAsync(cancellationToken);
+
             if (connection.ConnectionState != NatsConnectionState.Open)
             {
                 return HealthCheckResult.Unhealthy($"NATS connection is {connection.ConnectionState}");
             }
-
-            // Verify JetStream availability
-            var js = connection.CreateJetStreamContext();
-            await js.GetAccountInfoAsync(cancellationToken);
 
             return HealthCheckResult.Healthy("NATS and JetStream are operational.");
         }

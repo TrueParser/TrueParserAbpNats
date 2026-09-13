@@ -231,6 +231,59 @@ public sealed class NatsRecoveryIntegrationTests : NatsEventBusTestBase
         }
     }
 
+    [NatsFact]
+    public async Task Fresh_EventBus_Should_Start_After_Previous_Bus_Was_Shut_Down()
+    {
+        await using var server = await ManagedNatsServer.CreateAsync();
+        var streamName = $"Shutdown_{Guid.NewGuid():N}";
+        var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Shutdown.Events";
+        var eventName = $"Shutdown.Fresh.{Guid.NewGuid():N}";
+        var options = new NatsDistributedEventBusOptions
+        {
+            StreamName = streamName,
+            SubjectPrefix = subjectPrefix,
+            ClientName = $"Shutdown_{Guid.NewGuid():N}"
+        };
+
+        var (oldBus, oldPool) = CreateEventBus(server.Url, options);
+        var oldReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var oldSubscription = oldBus.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ => oldReceived.TrySetResult()));
+
+        try
+        {
+            await oldBus.InitializeAsync();
+            await PublishDynamicEventAsync(oldBus, eventName, 1);
+            await oldReceived.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            oldBus.Dispose();
+            await oldPool.DisposeAsync();
+
+            var (freshBus, freshPool) = CreateEventBus(server.Url, options);
+            var freshReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var freshSubscription = freshBus.Subscribe(
+                eventName,
+                new RetainedEventHandler(_ => freshReceived.TrySetResult()));
+            try
+            {
+                await freshBus.InitializeAsync();
+                await PublishDynamicEventAsync(freshBus, eventName, 2);
+                await freshReceived.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            finally
+            {
+                freshBus.Dispose();
+                await freshPool.DisposeAsync();
+            }
+        }
+        finally
+        {
+            oldBus.Dispose();
+            await oldPool.DisposeAsync();
+        }
+    }
+
     private (NatsDistributedEventBus EventBus, AbpNatsConnectionPool Pool) CreateEventBus(
         string url,
         string streamName,

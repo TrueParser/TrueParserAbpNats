@@ -75,7 +75,7 @@ Execute the numbered items one at a time.
 ## Current implementation status
 
 Status recorded on 2026-09-13. This proposal is **not complete**. The
-following eighteen tests have been implemented and passed against the local
+following twenty-four tests have been implemented and passed against the local
 JetStream-enabled NATS servers and the disposable MySQL test database:
 
 | Proposal test | Status | Implemented test |
@@ -98,13 +98,19 @@ JetStream-enabled NATS servers and the disposable MySQL test database:
 | 5.3 durable backlog recovery after restart | `[x]` Verified | `Durable_Consumer_Should_Resume_Backlog_After_Server_Restart` |
 | 6.1 bounded application shutdown | `[x]` Verified | `Application_Shutdown_Should_Stop_Consumers_Without_Hanging` |
 | 6.2 disposed event bus stops consuming | `[x]` Verified | `Disposed_EventBus_Should_No_Longer_Consume_Messages` |
+| 6.3 fresh event bus after shutdown | `[x]` Verified | `Fresh_EventBus_Should_Start_After_Previous_Bus_Was_Shut_Down` |
+| 7.1 PublishMany publishes all events with original IDs | `[x]` Verified | `PublishManyFromOutbox_Should_Publish_All_Events_With_Original_MessageIds` |
+| 7.2 PublishMany emits one notification per event | `[x]` Verified | `PublishManyFromOutbox_Should_Emit_One_Outbox_Sent_Notification_Per_Event` |
+| 7.3 PublishMany stops on partial failure | `[x]` Verified | `PublishManyFromOutbox_Should_Stop_On_Partial_Failure` |
+| 7.4 retry after partial failure avoids duplicate delivery | `[x]` Verified | `Retry_After_Partial_Batch_Failure_Should_Not_Create_Duplicate_Business_Delivery` |
+| 8.1 healthy NATS and JetStream health check | `[x]` Verified | `HealthCheck_Should_Be_Healthy_When_NATS_And_JetStream_Are_Available` |
 
-The following remain pending and must not be inferred as covered by the eighteen
+The following remain pending and must not be inferred as covered by the twenty-four
 tests above:
 
 ```text
-7    PublishManyFromOutboxAsync success and partial failure
-8    health-check behavior
+8.2 health check when server is unreachable
+8.3 health check when NATS runs without JetStream
 9    complete DistributedEventReceived notification matrix
 10   independent multi-process fan-out and replica verification
 11   line/branch coverage measurement and uncovered-branch review
@@ -119,8 +125,8 @@ methods for the six end-to-end tests.
 Verification snapshot:
 
 ```text
-Live suite:        62 passed, 0 failed, 0 skipped
-Broker-free suite: 2 passed, 0 failed, 60 skipped
+Live suite:        68 passed, 0 failed, 0 skipped
+Broker-free suite: 2 passed, 0 failed, 66 skipped
 ```
 
 The live tests remain gated by `NatsFact` and `RUN_NATS_TESTS=true`; the
