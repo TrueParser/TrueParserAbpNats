@@ -72,12 +72,16 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
     {
         // Arrange
         var receivedValues = new ConcurrentDictionary<int, byte>();
+        var receivedEventNames = new ConcurrentDictionary<string, byte>();
         var receivedAllValues = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var eventPrefix = $"WildcardResolution.{Guid.NewGuid():N}";
+        var wildcardEventName = $"{eventPrefix}.*";
         
         // Subject prefix is TrueParser.Test.Events
         // This subscription should catch any events starting with TrueParser.Test.Events.Wildcard
-        using var subscription = _distributedEventBus.Subscribe("Wildcard.*", new WildcardTestHandler(eventData =>
+        using var subscription = _distributedEventBus.Subscribe(wildcardEventName, new WildcardTestHandler(eventData =>
         {
+            receivedEventNames.TryAdd(eventData.EventName, 0);
             var value = eventData.Data switch
             {
                 JsonElement jsonElement when jsonElement.ValueKind == JsonValueKind.Object
@@ -99,8 +103,8 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
         var iterations = 0;
         while (!receivedAllValues.Task.IsCompleted && iterations < 20)
         {
-            await _distributedEventBus.PublishAsync(typeof(DynamicEventData), new DynamicEventData("Wildcard.First", new { Value = 1 }), onUnitOfWorkComplete: false, useOutbox: false);
-            await _distributedEventBus.PublishAsync(typeof(DynamicEventData), new DynamicEventData("Wildcard.Second", new { Value = 2 }), onUnitOfWorkComplete: false, useOutbox: false);
+            await _distributedEventBus.PublishAsync(typeof(DynamicEventData), new DynamicEventData($"{eventPrefix}.First", new { Value = 1 }), onUnitOfWorkComplete: false, useOutbox: false);
+            await _distributedEventBus.PublishAsync(typeof(DynamicEventData), new DynamicEventData($"{eventPrefix}.Second", new { Value = 2 }), onUnitOfWorkComplete: false, useOutbox: false);
             await _distributedEventBus.PublishAsync(typeof(DynamicEventData), new DynamicEventData("NotWildcard.Something", new { Value = 3 }), onUnitOfWorkComplete: false, useOutbox: false);
             await Task.Delay(100);
             iterations++;
@@ -112,6 +116,9 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
         receivedValues.ContainsKey(1).ShouldBeTrue();
         receivedValues.ContainsKey(2).ShouldBeTrue();
         receivedValues.ContainsKey(3).ShouldBeFalse();
+        receivedEventNames.Count.ShouldBe(2);
+        receivedEventNames.ContainsKey($"{eventPrefix}.First").ShouldBeTrue();
+        receivedEventNames.ContainsKey($"{eventPrefix}.Second").ShouldBeTrue();
     }
     [NatsFact]
     public async Task New_Consumer_Should_Receive_Messages_Retained_By_Other_Consumers_Interest()

@@ -267,7 +267,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                     {
                         try
                         {
-                            await ProcessMessageAsync(eventName, msg);
+                            await ProcessMessageAsync(msg);
                             await msg.AckAsync();
                         }
                         catch (Exception ex)
@@ -481,10 +481,11 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         return clientName;
     }
 
-    private async Task ProcessMessageAsync(string eventName, INatsJSMsg<byte[]> msg)
+    private async Task ProcessMessageAsync(INatsJSMsg<byte[]> msg)
     {
         if (msg.Data == null) return;
 
+        var eventName = GetEventNameFromSubject(msg.Subject);
         var correlationId = msg.Headers?.TryGetValue("Abp-Correlation-Id", out var values) == true
             ? values.FirstOrDefault()?.ToString()
             : null;
@@ -794,6 +795,18 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private string GetEventNameFromSubject(string subject)
+    {
+        var subjectPrefix = $"{NatsOptions.SubjectPrefix}.";
+        if (!subject.StartsWith(subjectPrefix, StringComparison.Ordinal))
+        {
+            throw new AbpException(
+                $"Received NATS subject '{subject}' does not match the configured subject prefix '{NatsOptions.SubjectPrefix}'.");
+        }
+
+        return subject[subjectPrefix.Length..];
+    }
 
     protected virtual string GetSubjectName(string eventName)
     {

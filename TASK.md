@@ -275,7 +275,7 @@ Verification record:
 
 ### 1.4 Actual Dynamic Event-Name Resolution Slice
 
-Status: `[ ]` Pending.
+Status: `[x]` Complete.
 
 Problem statement:
 
@@ -285,16 +285,27 @@ published event name, such as `Identity.User.Created`, not the wildcard pattern.
 
 Scope:
 
-- [ ] Derive the actual event name from `msg.Subject` by removing the configured subject prefix.
-- [ ] Use the subscription pattern only for consumer filtering.
-- [ ] Preserve exact event names for direct dynamic subscriptions and typed events.
-- [ ] Extend the wildcard integration coverage to assert the resulting `DynamicEventData.EventName` values exactly.
+- [x] Derive the actual event name from `msg.Subject` by removing the configured subject prefix.
+- [x] Use the subscription pattern only for consumer filtering.
+- [x] Preserve exact event names for direct dynamic subscriptions and typed events.
+- [x] Extend the wildcard integration coverage to assert the resulting `DynamicEventData.EventName` values exactly.
 
 Completion criteria:
 
-- [ ] Wildcard handlers receive the actual published event name for each message.
-- [ ] Subject-prefix removal is deterministic and does not alter event-name segments.
-- [ ] Existing exact and typed event behavior remains unchanged.
+- [x] Wildcard handlers receive the actual published event name for each message.
+- [x] Subject-prefix removal is deterministic and does not alter event-name segments.
+- [x] Existing exact and typed event behavior remains unchanged.
+
+Verification record:
+
+- Regression-first check: the strengthened wildcard test was run before the production fix and failed because the handler received the subscription pattern `WildcardResolution.<id>.*` instead of the two concrete published event names.
+- `ProcessMessageAsync` now derives the event name from `INatsJSMsg.Subject`, removes the configured `SubjectPrefix` with ordinal matching, and rejects a subject outside that prefix rather than reusing the subscription pattern.
+- The wildcard integration test uses isolated event names and asserts exact membership for both published names; it does not assume delivery order.
+- Roslyn Debug build for the test project: succeeded with 0 warnings and 0 errors.
+- Focused wildcard regression with `RUN_NATS_TESTS=true`: passed.
+- Full live test project with `RUN_NATS_TESTS=true`: 18 passed, 0 failed.
+- Normal test project without the NATS gate: 1 passed, 17 skipped by the existing live-test gate.
+- No dynamic Inbox, notification, delivery-policy, retention, redelivery, stream-management, or other later hardening semantics were changed.
 
 ### 1.5 Dynamic Events Through ABP Inbox Slice
 
