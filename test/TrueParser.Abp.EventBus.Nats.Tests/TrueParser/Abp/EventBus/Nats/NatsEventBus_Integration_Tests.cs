@@ -948,6 +948,75 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
     }
 
     [NatsFact]
+    public async Task Sanitized_Durable_Names_Should_Not_Collide_For_Distinct_Event_Names()
+    {
+        using var eventBus = CreateCapturingEventBus();
+
+        var consumerNameA = eventBus.GetConsumerNameForTest("Order.Created");
+        var consumerNameB = eventBus.GetConsumerNameForTest("Order_Created");
+
+        consumerNameA.ShouldNotBe(consumerNameB);
+    }
+
+    [NatsFact]
+    public async Task Existing_Durable_With_Wrong_Filter_Subject_Should_Fail_Initialization()
+    {
+        var streamName = $"ConsumerValidation_{Guid.NewGuid():N}";
+        var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.ConsumerValidation.Events";
+        var eventName = "Order.Created";
+        var clientName = "ConsumerValidation-Service";
+        var consumerName = System.Text.RegularExpressions.Regex.Replace(
+            $"{streamName}_{clientName}_{eventName}",
+            @"[^a-zA-Z0-9\-_]",
+            "_");
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+
+        await js.CreateStreamAsync(new StreamConfig(streamName, [$"{subjectPrefix}.>"])
+        {
+            Retention = StreamConfigRetention.Interest,
+            NumReplicas = 1
+        });
+        await js.CreateOrUpdateConsumerAsync(
+            streamName,
+            new ConsumerConfig(consumerName)
+            {
+                FilterSubject = $"{subjectPrefix}.Different.Event",
+                AckPolicy = ConsumerConfigAckPolicy.Explicit,
+                DeliverPolicy = ConsumerConfigDeliverPolicy.New
+            });
+
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = streamName,
+                SubjectPrefix = subjectPrefix,
+                ClientName = clientName
+            }));
+        using var subscription = eventBus.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ => { }));
+
+        var exception = await Should.ThrowAsync<AbpException>(() => eventBus.InitializeAsync());
+        exception.Message.ShouldContain("consumer");
+        exception.Message.ShouldContain("FilterSubject");
+    }
+
+    [NatsFact]
+    public async Task Typed_Outbox_Event_Should_Register_Event_Type_For_Transport()
+    {
+        var eventName = $"OutboxRegistration.{Guid.NewGuid():N}";
+        using var eventBus = CreateCapturingEventBus();
+
+        await eventBus.InvokeOnAddToOutboxForTestAsync(
+            eventName,
+            typeof(TestEventData),
+            new TestEventData { Message = "from-outbox" });
+
+        eventBus.GetEventTypeForTest(eventName).ShouldBe(typeof(TestEventData));
+    }
+
+    [NatsFact]
     public async Task EventBus_ClientName_Should_Not_Fall_Back_To_AbpNats_ClientName()
     {
         using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
@@ -1520,6 +1589,23 @@ public sealed class CapturingNatsDistributedEventBus : NatsDistributedEventBus
     public Task ProcessFromInboxForTestAsync(IncomingEventInfo incomingEvent, InboxConfig inboxConfig)
     {
         return base.ProcessFromInboxAsync(incomingEvent, inboxConfig);
+    }
+
+    public Task InvokeOnAddToOutboxForTestAsync(string eventName, Type eventType, object eventData)
+    {
+        return base.OnAddToOutboxAsync(eventName, eventType, eventData);
+    }
+
+    public Type? GetEventTypeForTest(string eventName)
+    {
+        return base.GetEventTypeByEventName(eventName);
+    }
+
+    public string GetConsumerNameForTest(string eventName)
+    {
+        return (string)typeof(NatsDistributedEventBus)
+            .GetMethod("GetConsumerName", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(this, [eventName])!;
     }
 }
 
