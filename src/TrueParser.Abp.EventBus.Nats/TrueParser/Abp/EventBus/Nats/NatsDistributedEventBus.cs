@@ -88,6 +88,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
     public virtual async Task InitializeAsync()
     {
         ResolveClientName();
+        ValidateRetention();
         await EnsureStreamExistsAsync();
         SubscribeHandlers(AbpDistributedEventBusOptions.Handlers);
         await WaitForConsumerStartupsAsync();
@@ -95,6 +96,8 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
     protected virtual async Task EnsureStreamExistsAsync()
     {
+        ValidateRetention();
+
         if (_streamCreated) return;
 
         await _streamSemaphore.WaitAsync();
@@ -441,6 +444,15 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
             'd' or 'D' => TimeSpan.FromDays(amount),
             _ => null
         };
+    }
+
+    private void ValidateRetention()
+    {
+        if (NatsOptions.Retention == StreamConfigRetention.Workqueue)
+        {
+            throw new AbpException(
+                "TrueParser:EventBus:Nats:Retention cannot be Workqueue because it removes messages after one consumer acknowledges them and breaks distributed-event fan-out. Use Interest (the default) or Limits intentionally.");
+        }
     }
 
     private static long? ParsePrefetchCount(string? value)

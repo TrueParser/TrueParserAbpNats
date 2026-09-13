@@ -425,7 +425,7 @@ Verification record:
 
 ### 1.8 Retention and Fan-Out Configuration Validation Slice
 
-Status: `[ ]` Pending.
+Status: `[x]` Complete.
 
 Problem statement:
 
@@ -435,16 +435,31 @@ worker group processes it.
 
 Scope:
 
-- [ ] Preserve `Interest` as the default retention policy.
-- [ ] Support `Limits` only as an intentional advanced configuration.
-- [ ] Reject `WorkQueuePolicy` for the standard event-bus path, or obtain explicit maintainer direction for a clearly warned opt-in.
-- [ ] Add focused tests for the default, independent fan-out, and invalid WorkQueue configuration behavior.
+- [x] Preserve `Interest` as the default retention policy.
+- [x] Support `Limits` only as an intentional advanced configuration.
+- [x] Reject `WorkQueuePolicy` for the standard event-bus path, or obtain explicit maintainer direction for a clearly warned opt-in.
+- [x] Add focused tests for the default, independent fan-out, and invalid WorkQueue configuration behavior.
 
 Completion criteria:
 
-- [ ] Default retention remains `Interest`.
-- [ ] Independent service identities receive the same event under the supported fan-out configuration.
-- [ ] Unsupported WorkQueue configuration fails clearly or has an explicitly approved opt-in warning.
+- [x] Default retention remains `Interest`.
+- [x] Independent service identities receive the same event under the supported fan-out configuration.
+- [x] Unsupported WorkQueue configuration fails clearly or has an explicitly approved opt-in warning.
+
+Verification record:
+
+- Regression-first check: `WorkQueue_Retention_Should_Fail_During_Initialization` was run before the production fix and failed because `InitializeAsync()` accepted `StreamConfigRetention.Workqueue` instead of throwing.
+- `StreamConfigRetention.Interest` remains the default; `Limits` remains allowed as an intentional advanced configuration.
+- Added retention validation to initialization and stream-ensure paths. `Workqueue` now fails with an actionable `AbpException` explaining that it breaks distributed-event fan-out and recommending `Interest` or intentional `Limits`.
+- Existing independent-`ClientName` live coverage verifies that supported fan-out delivers one event copy to each service identity.
+- Added a normal unit regression asserting the options default is `Interest`.
+- Updated `docs/wiki.md` to document supported retention policies and the rejected `Workqueue` behavior.
+- Roslyn Debug build for the test project: succeeded with 0 warnings and 0 errors.
+- Focused retention tests with `RUN_NATS_TESTS=true`: 2 live tests passed; the default-retention unit test also passed.
+- Full live test project with `RUN_NATS_TESTS=true`: 28 passed, 0 failed.
+- Normal test project without the NATS gate: 2 passed, 26 skipped, 0 failed.
+- `dotnet build TrueParser.Abp.Nats.slnx --no-restore`: succeeded with 0 warnings and 0 errors.
+- No consumer identity, message identity, Inbox/Outbox, event-name, delivery-policy, redelivery, stream-management, or later hardening semantics were changed.
 
 ### 1.9 Redelivery and Poison-Message Controls Slice
 

@@ -929,6 +929,25 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
         var exception = await Should.ThrowAsync<AbpException>(() => eventBus.InitializeAsync());
         exception.Message.ShouldContain("must contain at least one letter or digit");
     }
+
+    [NatsFact]
+    public async Task WorkQueue_Retention_Should_Fail_During_Initialization()
+    {
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = $"Retention_{Guid.NewGuid():N}",
+                SubjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Retention.Events",
+                ClientName = "RetentionValidation",
+                Retention = StreamConfigRetention.Workqueue
+            }));
+
+        var exception = await Should.ThrowAsync<AbpException>(() => eventBus.InitializeAsync());
+        exception.Message.ShouldContain("Retention");
+        exception.Message.ShouldContain("Workqueue");
+        exception.Message.ShouldContain("Interest");
+    }
 }
 
 [EventName("TestEvent")]

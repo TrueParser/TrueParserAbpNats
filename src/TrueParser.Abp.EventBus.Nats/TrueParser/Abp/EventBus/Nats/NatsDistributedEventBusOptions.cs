@@ -16,6 +16,10 @@ public class NatsDistributedEventBusOptions
     /// </summary>
     public string? ClientName { get; set; }
 
+    /// <summary>
+    /// Stream retention policy. Interest is the default for distributed-event
+    /// fan-out; Workqueue is not supported by the standard event-bus path.
+    /// </summary>
     public StreamConfigRetention Retention { get; set; } = StreamConfigRetention.Interest;
 
     public int ReplicaCount { get; set; } = 1;

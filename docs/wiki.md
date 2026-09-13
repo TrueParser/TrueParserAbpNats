@@ -136,7 +136,7 @@ independent fan-out copies.
 | `ClientName` | _(required)_ | Stable logical service identity used in durable consumer names |
 | `ConnectionName` | `null` (uses default) | Which named NATS connection to use |
 | `InitialDeliveryPolicy` | `New` | Starting policy for a brand-new durable consumer: `New` or `All` |
-| `Retention` | `Interest` | `Limits`, `Interest`, or `Workqueue` — see below |
+| `Retention` | `Interest` | `Interest` (default) or `Limits`; `Workqueue` is rejected — see below |
 | `ReplicaCount` | `1` | Number of stream replicas (use 3 for HA clusters) |
 | `MaxAge` | `null` | Max message retention (e.g. `"24h"`) |
 
@@ -146,7 +146,14 @@ independent fan-out copies.
 |---|---|
 | `Interest` | **Default.** Keeps messages until all consumers have ack'd. Correct for fan-out pub/sub. |
 | `Limits` | Keeps messages up to size/age/count limits. Use when you want bounded storage regardless of consumers. |
-| `Workqueue` | Deletes after first consumer ack. Use only for task-queue patterns, NOT for fan-out. |
+| `Workqueue` | Rejected for the standard event-bus path because it deletes after the first consumer ack and breaks fan-out. |
+
+`Interest` is the supported default for ABP distributed-event fan-out. `Limits`
+is supported as an intentional advanced configuration when bounded storage is
+more important than retaining messages for currently interested consumers.
+`Workqueue` is not supported by this package's standard event-bus path; startup
+fails with an actionable configuration error instead of silently changing
+fan-out semantics.
 
 #### Initial delivery policy
 
@@ -404,7 +411,7 @@ The published subject does not match any JetStream stream.
 ### Message published but handler never fires
 
 - The durable consumer is created asynchronously on first `Subscribe`. For existing consumers (restarts), NATS resumes from the last acknowledged position automatically. For brand-new consumers, `InitialDeliveryPolicy.New` is used by default; set it to `All` to intentionally replay retained historical messages. Note: with `Interest` retention, a message published when **no consumers at all** exist on the stream is discarded immediately by NATS and cannot be recovered regardless of delivery policy.
-- Check that the stream `Retention` is not `Workqueue` — that policy deletes after the first consumer acks, breaking fan-out
+- If startup reports that `Retention` cannot be `Workqueue`, use `Interest` for fan-out or intentionally choose `Limits`
 - Verify the handler class is registered with ABP's DI (`[ExposeServices]` or module registration)
 
 ### `NatsJSApiException` with error code 10058 on startup
