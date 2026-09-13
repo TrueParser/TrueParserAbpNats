@@ -653,9 +653,24 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
     public override async Task ProcessFromInboxAsync(IncomingEventInfo incomingEvent, InboxConfig inboxConfig)
     {
         var eventType = EventTypes.GetOrDefault(incomingEvent.EventName);
-        if (eventType == null) return;
+        object eventData;
 
-        var eventData = Serializer.Deserialize(incomingEvent.EventData, eventType);
+        if (eventType != null)
+        {
+            eventData = Serializer.Deserialize(incomingEvent.EventData, eventType);
+        }
+        else if (GetDynamicHandlerFactories(incomingEvent.EventName).Any())
+        {
+            eventType = typeof(DynamicEventData);
+            eventData = new DynamicEventData(
+                incomingEvent.EventName,
+                Serializer.Deserialize<object>(incomingEvent.EventData));
+        }
+        else
+        {
+            return;
+        }
+
         var exceptions = new List<Exception>();
 
         using (CorrelationIdProvider.Change(incomingEvent.GetCorrelationId()))

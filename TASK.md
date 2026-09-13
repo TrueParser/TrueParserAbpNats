@@ -309,7 +309,7 @@ Verification record:
 
 ### 1.5 Dynamic Events Through ABP Inbox Slice
 
-Status: `[ ]` Pending.
+Status: `[x]` Complete.
 
 Problem statement:
 
@@ -319,18 +319,31 @@ running.
 
 Scope:
 
-- [ ] Match the ABP RabbitMQ behavior for typed and dynamic Inbox paths.
-- [ ] Deserialize known typed events using their CLR type and invoke typed handlers.
-- [ ] For an unknown CLR type with a matching dynamic handler, deserialize raw data, wrap it in `DynamicEventData` using the actual event name, and invoke the matching dynamic handlers.
-- [ ] Preserve existing wildcard event-name matching logic.
-- [ ] Add focused tests for exact dynamic Inbox events, wildcard dynamic Inbox events, typed Inbox events, and unknown events with no unrelated handler invocation.
+- [x] Match the ABP RabbitMQ behavior for typed and dynamic Inbox paths.
+- [x] Deserialize known typed events using their CLR type and invoke typed handlers.
+- [x] For an unknown CLR type with a matching dynamic handler, deserialize raw data, wrap it in `DynamicEventData` using the actual event name, and invoke the matching dynamic handlers.
+- [x] Preserve existing wildcard event-name matching logic.
+- [x] Add focused tests for exact dynamic Inbox events, wildcard dynamic Inbox events, typed Inbox events, and unknown events with no unrelated handler invocation.
 
 Completion criteria:
 
-- [ ] Exact dynamic events are processed through Inbox.
-- [ ] Wildcard dynamic events are processed through Inbox with the actual event name.
-- [ ] Typed events still use their typed deserialization and handlers.
-- [ ] Unknown events do not invoke unrelated handlers.
+- [x] Exact dynamic events are processed through Inbox.
+- [x] Wildcard dynamic events are processed through Inbox with the actual event name.
+- [x] Typed events still use their typed deserialization and handlers.
+- [x] Unknown events do not invoke unrelated handlers.
+
+Verification record:
+
+- Regression-first check: the exact and wildcard dynamic Inbox tests were run before the production fix and failed by timing out because `ProcessFromInboxAsync` returned when `EventTypes` had no CLR type.
+- `ProcessFromInboxAsync` now preserves typed deserialization and uses `GetDynamicHandlerFactories(incomingEvent.EventName)` for dynamic eligibility, retaining the existing wildcard `MatchesEventName` logic. Matching dynamic events are wrapped in `DynamicEventData` with the actual event name and sent through `TriggerHandlersFromInboxAsync`.
+- Added gated coverage for exact dynamic Inbox dispatch, wildcard dynamic Inbox dispatch with actual event-name preservation, typed Inbox dispatch, and unknown events with no unrelated handler invocation.
+- All new tests use the existing `[NatsFact]` / `RUN_NATS_TESTS=true` gate. Normal test execution does not exercise them.
+- Roslyn Debug build for the test project: succeeded with 0 warnings and 0 errors.
+- Focused dynamic Inbox tests with `RUN_NATS_TESTS=true`: 2 passed, 0 failed.
+- Focused typed and unknown-event Inbox tests with `RUN_NATS_TESTS=true`: 2 passed, 0 failed.
+- Full live test project with `RUN_NATS_TESTS=true`: 22 passed, 0 failed.
+- Normal test project without the NATS gate: 1 passed, 21 skipped by the existing live-test gate.
+- No message identity, notification, delivery-policy, retention, redelivery, stream-management, or later hardening semantics were changed.
 
 ### 1.6 DistributedEventSent Notification Parity Slice
 

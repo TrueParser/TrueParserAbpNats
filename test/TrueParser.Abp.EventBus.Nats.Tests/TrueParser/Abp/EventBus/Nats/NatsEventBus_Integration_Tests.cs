@@ -120,6 +120,113 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
         receivedEventNames.ContainsKey($"{eventPrefix}.First").ShouldBeTrue();
         receivedEventNames.ContainsKey($"{eventPrefix}.Second").ShouldBeTrue();
     }
+
+    [NatsFact]
+    public async Task Dynamic_Event_Should_Be_Processed_Through_Abp_Inbox()
+    {
+        var eventName = $"DynamicInbox.Exact.{Guid.NewGuid():N}";
+        var received = new TaskCompletionSource<DynamicEventData>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var serializer = GetRequiredService<INatsEventSerializer>();
+
+        using var eventBus = CreateCapturingEventBus();
+        using var subscription = eventBus.Subscribe(
+            eventName,
+            new RetainedEventHandler(data => received.TrySetResult(data)));
+
+        await eventBus.ProcessFromInboxForTestAsync(
+            CreateIncomingEvent(eventName, serializer.Serialize(new { Value = 42 })),
+            new InboxConfig($"DynamicInbox_{Guid.NewGuid():N}"));
+
+        var eventData = await received.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        eventData.EventName.ShouldBe(eventName);
+        eventData.Data.ShouldNotBeNull();
+    }
+
+    [NatsFact]
+    public async Task Wildcard_Dynamic_Event_Should_Be_Processed_Through_Abp_Inbox_With_Actual_Event_Name()
+    {
+        var eventPrefix = $"DynamicInbox.Wildcard.{Guid.NewGuid():N}";
+        var eventName = $"{eventPrefix}.Created";
+        var received = new TaskCompletionSource<DynamicEventData>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var serializer = GetRequiredService<INatsEventSerializer>();
+
+        using var eventBus = CreateCapturingEventBus();
+        using var subscription = eventBus.Subscribe(
+            $"{eventPrefix}.*",
+            new RetainedEventHandler(data => received.TrySetResult(data)));
+
+        await eventBus.ProcessFromInboxForTestAsync(
+            CreateIncomingEvent(eventName, serializer.Serialize(new { Value = 7 })),
+            new InboxConfig($"DynamicInbox_{Guid.NewGuid():N}"));
+
+        var eventData = await received.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        eventData.EventName.ShouldBe(eventName);
+        eventData.Data.ShouldNotBeNull();
+    }
+
+    [NatsFact]
+    public async Task Typed_Event_Should_Still_Be_Processed_Through_Abp_Inbox()
+    {
+        var received = new TaskCompletionSource<TestEventData>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var serializer = GetRequiredService<INatsEventSerializer>();
+
+        using var eventBus = CreateCapturingEventBus();
+        using var subscription = eventBus.Subscribe(
+            new TestEventHandler(data => received.TrySetResult(data)));
+
+        await eventBus.ProcessFromInboxForTestAsync(
+            CreateIncomingEvent(
+                "TestEvent",
+                serializer.Serialize(new TestEventData { Message = "from-inbox" })),
+            new InboxConfig($"TypedInbox_{Guid.NewGuid():N}"));
+
+        (await received.Task.WaitAsync(TimeSpan.FromSeconds(5))).Message.ShouldBe("from-inbox");
+    }
+
+    [NatsFact]
+    public async Task Unknown_Event_Should_Not_Invoke_Unrelated_Dynamic_Handler_From_Abp_Inbox()
+    {
+        var unrelatedEventName = $"DynamicInbox.Unrelated.{Guid.NewGuid():N}";
+        var unknownEventName = $"DynamicInbox.Unknown.{Guid.NewGuid():N}";
+        var invocationCount = 0;
+        var serializer = GetRequiredService<INatsEventSerializer>();
+
+        using var eventBus = CreateCapturingEventBus();
+        using var subscription = eventBus.Subscribe(
+            unrelatedEventName,
+            new RetainedEventHandler(_ => Interlocked.Increment(ref invocationCount)));
+
+        await eventBus.ProcessFromInboxForTestAsync(
+            CreateIncomingEvent(unknownEventName, serializer.Serialize(new { Value = 11 })),
+            new InboxConfig($"UnknownInbox_{Guid.NewGuid():N}"));
+
+        invocationCount.ShouldBe(0);
+    }
+
+    private CapturingNatsDistributedEventBus CreateCapturingEventBus()
+    {
+        var options = GetRequiredService<IOptions<NatsDistributedEventBusOptions>>().Value;
+        return ActivatorUtilities.CreateInstance<CapturingNatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = $"DynamicInbox_{Guid.NewGuid():N}",
+                SubjectPrefix = $"{Guid.NewGuid():N}.TrueParser.DynamicInbox.Events",
+                ClientName = $"DynamicInbox_{Guid.NewGuid():N}",
+                ConnectionName = options.ConnectionName
+            }));
+    }
+
+    private static IncomingEventInfo CreateIncomingEvent(string eventName, byte[] eventData)
+    {
+        return new IncomingEventInfo(
+            Guid.NewGuid(),
+            Guid.NewGuid().ToString("N"),
+            eventName,
+            eventData,
+            DateTime.UtcNow);
+    }
+
     [NatsFact]
     public async Task New_Consumer_Should_Receive_Messages_Retained_By_Other_Consumers_Interest()
     {
@@ -672,6 +779,19 @@ public class RetainedEventHandler : IDistributedEventHandler<DynamicEventData>
     }
 }
 
+public class TestEventHandler : IDistributedEventHandler<TestEventData>
+{
+    private readonly Action<TestEventData> _onReceived;
+
+    public TestEventHandler(Action<TestEventData> onReceived) => _onReceived = onReceived;
+
+    public Task HandleEventAsync(TestEventData eventData)
+    {
+        _onReceived(eventData);
+        return Task.CompletedTask;
+    }
+}
+
 public sealed class CapturingNatsDistributedEventBus : NatsDistributedEventBus
 {
     public string? LastMessageId { get; private set; }
@@ -728,6 +848,11 @@ public sealed class CapturingNatsDistributedEventBus : NatsDistributedEventBus
         string? correlationId)
     {
         return base.AddToInboxAsync(messageId, eventName, eventType, eventData, correlationId);
+    }
+
+    public Task ProcessFromInboxForTestAsync(IncomingEventInfo incomingEvent, InboxConfig inboxConfig)
+    {
+        return base.ProcessFromInboxAsync(incomingEvent, inboxConfig);
     }
 }
 
