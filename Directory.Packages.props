@@ -19,6 +19,9 @@
     <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.0" />
+    <PackageVersion Include="MySql.EntityFrameworkCore" Version="10.0.9" />
+    <PackageVersion Include="Volo.Abp.EntityFrameworkCore" Version="10.6.0" />
+    <PackageVersion Include="Volo.Abp.EntityFrameworkCore.MySQL" Version="10.6.0" />
 
     <!-- Test -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.9.0" />

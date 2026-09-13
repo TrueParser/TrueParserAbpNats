@@ -32,7 +32,7 @@ public class TrueParserAbpEventBusNatsTestModule : AbpModule
 
         Configure<AbpNatsOptions>(options =>
         {
-            options.Connections = "nats://localhost:4222";
+            options.Connections = Environment.GetEnvironmentVariable("NATS_TEST_URL") ?? "nats://localhost:4222";
             options.ClientName = "TrueParserConnection";
         });
         

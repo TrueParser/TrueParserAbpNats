@@ -15,6 +15,9 @@
     <PackageReference Include="Serilog" />
     <PackageReference Include="Serilog.Extensions.Logging" />
     <PackageReference Include="Serilog.Sinks.File" />
+    <PackageReference Include="MySql.EntityFrameworkCore" />
+    <PackageReference Include="Volo.Abp.EntityFrameworkCore" />
+    <PackageReference Include="Volo.Abp.EntityFrameworkCore.MySQL" />
     <PackageReference Include="Volo.Abp.TestBase" />
     <PackageReference Include="Volo.Abp.Autofac" />
   </ItemGroup>
