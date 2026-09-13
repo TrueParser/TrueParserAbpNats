@@ -172,6 +172,15 @@ resumes its stored delivery position and backlog.
 Set `InitialDeliveryPolicy` to `All` when a service intentionally needs to
 replay retained historical messages while creating a new durable consumer.
 
+#### Existing stream validation
+
+At initialization, the event bus creates a missing stream using the configured
+`StreamName`, `{SubjectPrefix}.>` subject, `Retention`, `ReplicaCount`, and
+`MaxAge`. If the stream already exists, those settings are validated before
+consumers start. A mismatch fails startup with the differences listed in the
+configuration error; the package does not automatically update or migrate an
+existing stream.
+
 #### Redelivery and poison messages
 
 `AckWait`, `MaxDeliver`, and `BackOff` are applied to newly created durable

@@ -950,6 +950,210 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
     }
 
     [NatsFact]
+    public async Task Incompatible_Existing_Stream_Should_Fail_During_Initialization()
+    {
+        var streamName = $"StreamValidation_{Guid.NewGuid():N}";
+        var configuredSubjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Configured.Events";
+        var existingSubjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Existing.Events";
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+
+        await js.CreateStreamAsync(new StreamConfig(
+            streamName,
+            [$"{existingSubjectPrefix}.>"])
+        {
+            Retention = StreamConfigRetention.Interest,
+            NumReplicas = 1
+        });
+
+        try
+        {
+            using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+                ServiceProvider,
+                Options.Create(new NatsDistributedEventBusOptions
+                {
+                    StreamName = streamName,
+                    SubjectPrefix = configuredSubjectPrefix,
+                    ClientName = "StreamValidation"
+                }));
+
+            var exception = await Should.ThrowAsync<AbpException>(() => eventBus.InitializeAsync());
+            exception.Message.ShouldContain("Subjects");
+            exception.Message.ShouldContain(configuredSubjectPrefix);
+        }
+        finally
+        {
+            await js.DeleteStreamAsync(streamName);
+        }
+    }
+
+    [NatsFact]
+    public async Task Missing_Stream_Should_Be_Created_With_Configured_Values()
+    {
+        var streamName = $"StreamValidation_{Guid.NewGuid():N}";
+        var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Stream.Events";
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = streamName,
+                SubjectPrefix = subjectPrefix,
+                ClientName = "StreamValidation",
+                Retention = StreamConfigRetention.Interest,
+                ReplicaCount = 1,
+                MaxAge = "5m"
+            }));
+
+        try
+        {
+            await eventBus.InitializeAsync();
+
+            var stream = await js.GetStreamAsync(streamName);
+            stream.Info.Config.Name.ShouldBe(streamName);
+            stream.Info.Config.Subjects.ShouldBe([$"{subjectPrefix}.>"]);
+            stream.Info.Config.Retention.ShouldBe(StreamConfigRetention.Interest);
+            stream.Info.Config.NumReplicas.ShouldBe(1);
+            stream.Info.Config.MaxAge.ShouldBe(TimeSpan.FromMinutes(5));
+        }
+        finally
+        {
+            await js.DeleteStreamAsync(streamName);
+        }
+    }
+
+    [NatsFact]
+    public async Task Matching_Existing_Stream_Should_Start_Successfully()
+    {
+        var streamName = $"StreamValidation_{Guid.NewGuid():N}";
+        var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Stream.Events";
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+        await js.CreateStreamAsync(new StreamConfig(streamName, [$"{subjectPrefix}.>"])
+        {
+            Retention = StreamConfigRetention.Interest,
+            NumReplicas = 1
+        });
+
+        try
+        {
+            using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+                ServiceProvider,
+                Options.Create(new NatsDistributedEventBusOptions
+                {
+                    StreamName = streamName,
+                    SubjectPrefix = subjectPrefix,
+                    ClientName = "StreamValidation"
+                }));
+
+            await eventBus.InitializeAsync();
+        }
+        finally
+        {
+            await js.DeleteStreamAsync(streamName);
+        }
+    }
+
+    [NatsFact]
+    public async Task Incompatible_Existing_Stream_Retention_Should_Fail_During_Initialization()
+    {
+        var streamName = $"StreamValidation_{Guid.NewGuid():N}";
+        var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Stream.Events";
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+        await js.CreateStreamAsync(new StreamConfig(streamName, [$"{subjectPrefix}.>"])
+        {
+            Retention = StreamConfigRetention.Limits,
+            NumReplicas = 1
+        });
+
+        try
+        {
+            using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+                ServiceProvider,
+                Options.Create(new NatsDistributedEventBusOptions
+                {
+                    StreamName = streamName,
+                    SubjectPrefix = subjectPrefix,
+                    ClientName = "StreamValidation",
+                    Retention = StreamConfigRetention.Interest
+                }));
+
+            var exception = await Should.ThrowAsync<AbpException>(() => eventBus.InitializeAsync());
+            exception.Message.ShouldContain("Retention");
+            exception.Message.ShouldContain("Interest");
+            exception.Message.ShouldContain("Limits");
+        }
+        finally
+        {
+            await js.DeleteStreamAsync(streamName);
+        }
+    }
+
+    [NatsFact]
+    public async Task Incompatible_Existing_Stream_Should_Report_Replica_And_MaxAge_Differences()
+    {
+        var streamName = $"StreamValidation_{Guid.NewGuid():N}";
+        var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Stream.Events";
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+        await js.CreateStreamAsync(new StreamConfig(streamName, [$"{subjectPrefix}.>"])
+        {
+            Retention = StreamConfigRetention.Interest,
+            NumReplicas = 1,
+            MaxAge = TimeSpan.FromMinutes(10)
+        });
+
+        try
+        {
+            using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+                ServiceProvider,
+                Options.Create(new NatsDistributedEventBusOptions
+                {
+                    StreamName = streamName,
+                    SubjectPrefix = subjectPrefix,
+                    ClientName = "StreamValidation",
+                    ReplicaCount = 2,
+                    MaxAge = "5m"
+                }));
+
+            var exception = await Should.ThrowAsync<AbpException>(() => eventBus.InitializeAsync());
+            exception.Message.ShouldContain("ReplicaCount");
+            exception.Message.ShouldContain("MaxAge");
+        }
+        finally
+        {
+            await js.DeleteStreamAsync(streamName);
+        }
+    }
+
+    [NatsFact]
+    public async Task Valid_Stream_Should_Succeed_On_Restart()
+    {
+        var streamName = $"StreamValidation_{Guid.NewGuid():N}";
+        var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Stream.Events";
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+        var options = Options.Create(new NatsDistributedEventBusOptions
+        {
+            StreamName = streamName,
+            SubjectPrefix = subjectPrefix,
+            ClientName = "StreamValidation"
+        });
+
+        try
+        {
+            using (var firstEventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(ServiceProvider, options))
+            {
+                await firstEventBus.InitializeAsync();
+            }
+
+            using var restartedEventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(ServiceProvider, options);
+            await restartedEventBus.InitializeAsync();
+        }
+        finally
+        {
+            await js.DeleteStreamAsync(streamName);
+        }
+    }
+
+    [NatsFact]
     public async Task Configured_Redelivery_Controls_Should_Be_Applied_To_New_Consumer()
     {
         var streamName = $"Redelivery_{Guid.NewGuid():N}";

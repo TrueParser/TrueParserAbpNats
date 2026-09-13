@@ -121,13 +121,25 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
             try
             {
-                await js.CreateStreamAsync(streamConfig);
+                var existingStream = await js.GetStreamAsync(NatsOptions.StreamName);
+                ValidateExistingStream(existingStream.Info, streamConfig);
                 _streamCreated = true;
             }
-            catch (NatsJSApiException ex) when (ex.Error.ErrCode == 10058)
+            catch (NatsJSApiException ex) when (ex.Error.Code == 404)
             {
-                // Stream already exists — that is fine
-                _streamCreated = true;
+                try
+                {
+                    await js.CreateStreamAsync(streamConfig);
+                    _streamCreated = true;
+                }
+                catch (NatsJSApiException createException) when (createException.Error.ErrCode == 10058)
+                {
+                    // Another initializer created the stream after the lookup. Validate
+                    // the resulting configuration instead of accepting it blindly.
+                    var existingStream = await js.GetStreamAsync(NatsOptions.StreamName);
+                    ValidateExistingStream(existingStream.Info, streamConfig);
+                    _streamCreated = true;
+                }
             }
         }
         catch (Exception ex)
@@ -428,6 +440,49 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         }
 
         ConsumerStartupSignals.TryRemove(eventName, out _);
+    }
+
+    private static void ValidateExistingStream(StreamInfo streamInfo, StreamConfig expectedConfig)
+    {
+        var actualConfig = streamInfo.Config;
+        var differences = new List<string>();
+
+        if (!string.Equals(actualConfig.Name, expectedConfig.Name, StringComparison.Ordinal))
+        {
+            differences.Add($"Name expected '{expectedConfig.Name}' but was '{actualConfig.Name}'");
+        }
+
+        var actualSubjects = (actualConfig.Subjects ?? []).OrderBy(subject => subject, StringComparer.Ordinal).ToArray();
+        var expectedSubjects = (expectedConfig.Subjects ?? []).OrderBy(subject => subject, StringComparer.Ordinal).ToArray();
+        if (!actualSubjects.SequenceEqual(expectedSubjects, StringComparer.Ordinal))
+        {
+            differences.Add(
+                $"Subjects expected [{string.Join(", ", expectedSubjects)}] but were [{string.Join(", ", actualSubjects)}]");
+        }
+
+        if (actualConfig.Retention != expectedConfig.Retention)
+        {
+            differences.Add($"Retention expected '{expectedConfig.Retention}' but was '{actualConfig.Retention}'");
+        }
+
+        if (actualConfig.NumReplicas != expectedConfig.NumReplicas)
+        {
+            differences.Add($"ReplicaCount expected '{expectedConfig.NumReplicas}' but was '{actualConfig.NumReplicas}'");
+        }
+
+        if (actualConfig.MaxAge != expectedConfig.MaxAge)
+        {
+            differences.Add($"MaxAge expected '{expectedConfig.MaxAge}' but was '{actualConfig.MaxAge}'");
+        }
+
+        if (differences.Count > 0)
+        {
+            throw new AbpException(
+                $"Existing NATS JetStream stream '{expectedConfig.Name}' has incompatible configuration: " +
+                string.Join("; ", differences) +
+                ". Update the stream or configure TrueParser:EventBus:Nats to match it. " +
+                "The existing stream was not modified.");
+        }
     }
 
     private static TimeSpan? ParseMaxAge(string? value)

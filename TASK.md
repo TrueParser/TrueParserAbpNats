@@ -506,7 +506,7 @@ Verification record:
 
 ### 1.10 Existing Stream Configuration Validation Slice
 
-Status: `[ ]` Pending.
+Status: `[x]` Completed.
 
 Problem statement:
 
@@ -516,20 +516,31 @@ bus. This can silently accept incompatible stream configuration.
 
 Scope:
 
-- [ ] Fetch an existing stream before deciding whether to create it.
-- [ ] Create a missing stream using the configured stream name, subject prefix, retention, replica count, and MaxAge where applicable.
-- [ ] Validate at minimum stream name, subjects/subject prefix, and retention on an existing stream.
-- [ ] Report replica-count and MaxAge differences where applicable.
-- [ ] Fail startup with an actionable configuration error for incompatible settings.
-- [ ] Do not mutate an existing stream automatically unless an explicit management option is separately approved.
-- [ ] Add focused tests for creation, matching restart, incompatible subject, incompatible retention, and valid restart behavior.
+- [x] Fetch an existing stream before deciding whether to create it.
+- [x] Create a missing stream using the configured stream name, subject prefix, retention, replica count, and MaxAge where applicable.
+- [x] Validate at minimum stream name, subjects/subject prefix, and retention on an existing stream.
+- [x] Report replica-count and MaxAge differences where applicable.
+- [x] Fail startup with an actionable configuration error for incompatible settings.
+- [x] Do not mutate an existing stream automatically unless an explicit management option is separately approved.
+- [x] Add focused tests for creation, matching restart, incompatible subject, incompatible retention, and valid restart behavior.
 
 Completion criteria:
 
-- [ ] Missing streams are created correctly.
-- [ ] Matching existing streams start successfully.
-- [ ] Incompatible critical configuration fails deterministically with useful details.
-- [ ] Existing streams are not silently mutated.
+- [x] Missing streams are created correctly.
+- [x] Matching existing streams start successfully.
+- [x] Incompatible critical configuration fails deterministically with useful details.
+- [x] Existing streams are not silently mutated.
+
+Verification record:
+
+- Regression-first reproduction: `Incompatible_Existing_Stream_Should_Fail_During_Initialization` was red before the fix because initialization accepted an existing stream with the wrong subject.
+- `EnsureStreamExistsAsync` now fetches existing streams, validates name, exact subjects, retention, replica count, and MaxAge, and creates only missing streams. A create race re-fetches and validates the resulting stream.
+- Incompatible configuration throws `AbpException` with the expected/actual differences and explicitly states that the stream was not modified.
+- Focused live stream-validation tests — 6 passed, 0 failed.
+- Full live test project with `RUN_NATS_TESTS=true` — 39 passed, 0 failed, 0 skipped.
+- Normal gated test project without `RUN_NATS_TESTS` — 2 passed, 37 skipped, 0 failed.
+- Targeted test-project build — succeeded with 0 warnings and 0 errors.
+- No stream-update, migration, management option, or unrelated event-bus semantic change was added.
 
 ### 1.11 Live JetStream Release-Gated Test Slice
 
