@@ -75,8 +75,8 @@ Execute the numbered items one at a time.
 ## Current implementation status
 
 Status recorded on 2026-09-13. This proposal is **not complete**. The
-following five tests have been implemented and passed against the local
-JetStream-enabled NATS server and the disposable MySQL test database:
+following twelve tests have been implemented and passed against the local
+JetStream-enabled NATS servers and the disposable MySQL test database:
 
 | Proposal test | Status | Implemented test |
 |---|---|---|
@@ -86,13 +86,18 @@ JetStream-enabled NATS server and the disposable MySQL test database:
 | 2.1 Inbox background processing | `[x]` Verified | `Incoming_NATS_Event_Should_Be_Processed_By_ABP_Inbox_Background_Processor` |
 | 2.2 failed Inbox handler | `[x]` Verified | `Failing_Inbox_Handler_Should_Not_Be_Marked_Processed` |
 | 2.3 Inbox duplicate protection | `[x]` Verified | `Successful_Inbox_Handler_Should_Be_Executed_Exactly_Once` |
+| 3.1 valid username/password authentication | `[x]` Verified | `UsernamePassword_Authentication_With_Valid_Credentials_Should_Connect` |
+| 3.2 invalid username/password authentication | `[x]` Verified | `UsernamePassword_Authentication_With_Invalid_Credentials_Should_Fail` |
+| 3.3 valid JWT/Seed authentication | `[x]` Verified | `JwtSeed_Authentication_With_Valid_Test_Credentials_Should_Connect` |
+| 3.4 invalid JWT/Seed authentication | `[x]` Verified | `JwtSeed_Authentication_With_Invalid_Seed_Should_Fail` |
+| 4.1 default connection resolution | `[x]` Verified | `Default_Connection_Should_Resolve_Default_Server` |
+| 4.2 named connection resolution | `[x]` Verified | `Named_Connection_Should_Resolve_Configured_Server` |
 
-The following remain pending and must not be inferred as covered by the five
+The following remain pending and must not be inferred as covered by the twelve
 tests above:
 
 ```text
-3    username/password and JWT/Seed authentication
-4    named connection resolution and connection reuse
+4.3 connection reuse
 5    broker disconnect, restart, and reconnect recovery
 6    complete shutdown lifecycle
 7    PublishManyFromOutboxAsync success and partial failure
@@ -111,12 +116,15 @@ methods for the six end-to-end tests.
 Verification snapshot:
 
 ```text
-Live suite:        50 passed, 0 failed, 0 skipped
-Broker-free suite: 2 passed, 0 failed, 48 skipped
+Live suite:        56 passed, 0 failed, 0 skipped
+Broker-free suite: 2 passed, 0 failed, 54 skipped
 ```
 
 The live tests remain gated by `NatsFact` and `RUN_NATS_TESTS=true`; the
-tagging and package-publication workflow is not part of this proposal update.
+authentication and named-connection tests use temporary local WSL JetStream
+servers on isolated ports, with generated JWT/Seed material kept outside the
+repository. The tagging and package-publication workflow is not part of this
+proposal update.
 
 ---
 
