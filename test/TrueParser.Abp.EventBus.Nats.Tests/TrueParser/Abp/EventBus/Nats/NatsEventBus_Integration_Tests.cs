@@ -228,13 +228,78 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
     }
 
     [NatsFact]
-    public async Task New_Consumer_Should_Receive_Messages_Retained_By_Other_Consumers_Interest()
+    public async Task New_Consumer_Default_Should_Not_Receive_PreExisting_Retained_Message()
+    {
+        var natsOptions = GetRequiredService<IOptions<NatsDistributedEventBusOptions>>().Value;
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync(natsOptions.ConnectionName);
+        var eventName = $"InitialDelivery.New.{Guid.NewGuid():N}";
+        var subject = $"{natsOptions.SubjectPrefix}.{eventName}";
+        var anchorConsumerName = $"InitialDelivery_Anchor_{Guid.NewGuid():N}";
+        var newConsumerClientName = $"InitialDelivery_New_{Guid.NewGuid():N}";
+
+        try
+        {
+            await js.CreateStreamAsync(new StreamConfig(
+                natsOptions.StreamName,
+                [$"{natsOptions.SubjectPrefix}.>"])
+            {
+                Retention = natsOptions.Retention,
+                NumReplicas = natsOptions.ReplicaCount
+            });
+        }
+        catch (NatsJSApiException ex) when (ex.Error.ErrCode == 10058)
+        {
+            // The test module may already have initialized the shared stream.
+        }
+
+        var anchorConfig = new ConsumerConfig(anchorConsumerName)
+        {
+            FilterSubject = subject,
+            AckPolicy = ConsumerConfigAckPolicy.Explicit,
+            DeliverPolicy = ConsumerConfigDeliverPolicy.All
+        };
+        await js.CreateOrUpdateConsumerAsync(natsOptions.StreamName, anchorConfig);
+
+        try
+        {
+            await _distributedEventBus.PublishAsync(
+                typeof(DynamicEventData),
+                new DynamicEventData(eventName, new { Value = 101 }),
+                onUnitOfWorkComplete: false,
+                useOutbox: false);
+
+            var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+                ServiceProvider,
+                Options.Create(new NatsDistributedEventBusOptions
+                {
+                    StreamName = natsOptions.StreamName,
+                    SubjectPrefix = natsOptions.SubjectPrefix,
+                    ClientName = newConsumerClientName
+                }));
+            using var subscription = eventBus.Subscribe(
+                eventName,
+                new RetainedEventHandler(_ => received.TrySetResult()));
+
+            await eventBus.InitializeAsync();
+            await Task.Delay(TimeSpan.FromSeconds(1));
+
+            received.Task.IsCompleted.ShouldBeFalse();
+        }
+        finally
+        {
+            await js.DeleteConsumerAsync(natsOptions.StreamName, anchorConsumerName);
+        }
+    }
+
+    [NatsFact]
+    public async Task Explicit_All_Consumer_Should_Receive_PreExisting_Retained_Message()
     {
         // Scenario 2 from R5 analysis:
         // A new consumer type joins a stream where other consumers already exist and have
         // kept messages alive via Interest retention.
-        // With DeliverPolicy.New the new consumer silently skips that backlog.
-        // With DeliverPolicy.All it catches up on retained messages.
+        // With DeliverPolicy.New the new consumer skips that backlog.
+        // With an explicit DeliverPolicy.All it catches up on retained messages.
         //
         // Interest retention keeps a message only while a consumer whose FilterSubject
         // MATCHES the message subject exists and hasn't acked it. So we create an "anchor"
@@ -271,13 +336,23 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
                 onUnitOfWorkComplete: false,
                 useOutbox: false);
 
-            // Step 3: Subscribe via the event bus — this creates a brand-new durable
-            // consumer. With DeliverPolicy.All it receives the message published in step 2.
+            // Step 3: Subscribe via an event bus explicitly configured with All — this
+            // creates a brand-new durable consumer that receives the retained message.
             var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var subscription = _distributedEventBus.Subscribe(eventName, new RetainedEventHandler(_ =>
+            using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+                ServiceProvider,
+                Options.Create(new NatsDistributedEventBusOptions
+                {
+                    StreamName = natsOpts.StreamName,
+                    SubjectPrefix = natsOpts.SubjectPrefix,
+                    ClientName = $"InitialDelivery_All_{Guid.NewGuid():N}",
+                    InitialDeliveryPolicy = ConsumerConfigDeliverPolicy.All
+                }));
+            using var subscription = eventBus.Subscribe(eventName, new RetainedEventHandler(_ =>
             {
                 received.TrySetResult();
             }));
+            await eventBus.InitializeAsync();
 
             // Step 4: The retained message must arrive within the timeout.
             await received.Task.WaitAsync(TimeSpan.FromSeconds(10));
@@ -287,6 +362,60 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
             // Clean up the anchor consumer so it doesn't hold unacked messages in the stream.
             await js.DeleteConsumerAsync(natsOpts.StreamName, anchorConsumerName);
         }
+    }
+
+    [NatsFact]
+    public async Task Existing_Durable_Consumer_Should_Resume_Retained_Backlog()
+    {
+        var natsOptions = GetRequiredService<IOptions<NatsDistributedEventBusOptions>>().Value;
+        var eventName = $"InitialDelivery.Resume.{Guid.NewGuid():N}";
+        var clientName = $"InitialDelivery_Resume_{Guid.NewGuid():N}";
+        var options = Options.Create(new NatsDistributedEventBusOptions
+        {
+            StreamName = natsOptions.StreamName,
+            SubjectPrefix = natsOptions.SubjectPrefix,
+            ClientName = clientName
+        });
+
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            options);
+
+        var firstReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstSubscription = eventBus.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ => firstReceived.TrySetResult()));
+
+        try
+        {
+            await eventBus.InitializeAsync();
+            await eventBus.PublishAsync(
+                typeof(DynamicEventData),
+                new DynamicEventData(eventName, new { Value = 201 }),
+                onUnitOfWorkComplete: false,
+                useOutbox: false);
+            await firstReceived.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            firstSubscription.Dispose();
+        }
+
+        await Task.Delay(250);
+
+        await eventBus.PublishAsync(
+            typeof(DynamicEventData),
+            new DynamicEventData(eventName, new { Value = 202 }),
+            onUnitOfWorkComplete: false,
+            useOutbox: false);
+
+        var resumedReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var resumedSubscription = eventBus.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ => resumedReceived.TrySetResult()));
+
+        await eventBus.InitializeAsync();
+        await resumedReceived.Task.WaitAsync(TimeSpan.FromSeconds(10));
     }
 
     [NatsFact]

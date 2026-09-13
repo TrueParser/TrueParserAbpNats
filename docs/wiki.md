@@ -30,7 +30,8 @@ TrueParser.Abp.Nats               ← core infrastructure
 TrueParser.Abp.EventBus.Nats      ← event bus
 │
 ├── NatsDistributedEventBus        implements DistributedEventBusBase
-├── NatsDistributedEventBusOptions stream name, subject prefix, retention
+├── NatsDistributedEventBusOptions stream name, subject prefix, client identity,
+│                                  initial delivery policy, retention
 ├── INatsEventSerializer           pluggable serialization contract
 └── DefaultNatsEventSerializer     System.Text.Json implementation
 ```
@@ -63,13 +64,17 @@ MyApp.Events.>
 
 ### Consumer naming
 
-Consumer names are derived as `{StreamName}_{EventName}` with all non-alphanumeric characters replaced by `_`:
+Consumer names are derived as `{StreamName}_{ClientName}_{EventName}` with all
+non-alphanumeric characters replaced by `_`:
 
 ```
-MyAppEvents_Ordering_OrderPlacedEto
+MyAppEvents_my-service_Ordering_OrderPlacedEto
 ```
 
 Names are sanitized to satisfy NATS consumer name constraints (alphanumeric, `-`, `_` only).
+`ClientName` is the required logical event-bus service identity: replicas with
+the same value share durable consumers, while different values receive
+independent fan-out copies.
 
 ---
 
@@ -112,7 +117,9 @@ Names are sanitized to satisfy NATS consumer name constraints (alphanumeric, `-`
       "Nats": {
         "StreamName": "MyAppEvents",
         "SubjectPrefix": "MyApp.Events",
+        "ClientName": "my-service",
         "ConnectionName": null,
+        "InitialDeliveryPolicy": "New",
         "Retention": "Interest",
         "ReplicaCount": 1,
         "MaxAge": null
@@ -126,7 +133,9 @@ Names are sanitized to satisfy NATS consumer name constraints (alphanumeric, `-`
 |---|---|---|
 | `StreamName` | `TrueParserEvents` | JetStream stream name |
 | `SubjectPrefix` | `TrueParser.Events` | Prefix for all event subjects |
+| `ClientName` | _(required)_ | Stable logical service identity used in durable consumer names |
 | `ConnectionName` | `null` (uses default) | Which named NATS connection to use |
+| `InitialDeliveryPolicy` | `New` | Starting policy for a brand-new durable consumer: `New` or `All` |
 | `Retention` | `Interest` | `Limits`, `Interest`, or `Workqueue` — see below |
 | `ReplicaCount` | `1` | Number of stream replicas (use 3 for HA clusters) |
 | `MaxAge` | `null` | Max message retention (e.g. `"24h"`) |
@@ -138,6 +147,17 @@ Names are sanitized to satisfy NATS consumer name constraints (alphanumeric, `-`
 | `Interest` | **Default.** Keeps messages until all consumers have ack'd. Correct for fan-out pub/sub. |
 | `Limits` | Keeps messages up to size/age/count limits. Use when you want bounded storage regardless of consumers. |
 | `Workqueue` | Deletes after first consumer ack. Use only for task-queue patterns, NOT for fan-out. |
+
+#### Initial delivery policy
+
+`InitialDeliveryPolicy` applies only when a durable consumer is created for the
+first time. The default `New` policy delivers messages published after that
+consumer is created, matching normal RabbitMQ queue creation behavior. An
+existing durable consumer is fetched without changing its configuration and
+resumes its stored delivery position and backlog.
+
+Set `InitialDeliveryPolicy` to `All` when a service intentionally needs to
+replay retained historical messages while creating a new durable consumer.
 
 ---
 
@@ -383,7 +403,7 @@ The published subject does not match any JetStream stream.
 
 ### Message published but handler never fires
 
-- The durable consumer is created asynchronously on first `Subscribe`. For existing consumers (restarts), NATS resumes from the last acknowledged position automatically. For brand-new consumers, `DeliverPolicy.All` is used so that messages already retained in the stream — kept alive by other consumers' `Interest` — are delivered on first connect. Note: with `Interest` retention, a message published when **no consumers at all** exist on the stream is discarded immediately by NATS and cannot be recovered regardless of delivery policy.
+- The durable consumer is created asynchronously on first `Subscribe`. For existing consumers (restarts), NATS resumes from the last acknowledged position automatically. For brand-new consumers, `InitialDeliveryPolicy.New` is used by default; set it to `All` to intentionally replay retained historical messages. Note: with `Interest` retention, a message published when **no consumers at all** exist on the stream is discarded immediately by NATS and cannot be recovered regardless of delivery policy.
 - Check that the stream `Retention` is not `Workqueue` — that policy deletes after the first consumer acks, breaking fan-out
 - Verify the handler class is registered with ABP's DI (`[ExposeServices]` or module registration)
 

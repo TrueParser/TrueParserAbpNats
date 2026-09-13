@@ -385,7 +385,7 @@ Verification record:
 
 ### 1.7 Explicit Initial Consumer Delivery Policy Slice
 
-Status: `[ ]` Pending.
+Status: `[x]` Complete.
 
 Problem statement:
 
@@ -395,18 +395,33 @@ queue creation semantics.
 
 Scope:
 
-- [ ] Add an explicit initial consumer delivery-policy option.
-- [ ] Default new consumers to `New` for RabbitMQ-compatible behavior.
-- [ ] Preserve resume/backlog behavior for an existing durable consumer.
-- [ ] Support explicit `All` configuration for intentional retained-message replay.
-- [ ] Add focused tests proving default new-only behavior and explicit historical replay.
+- [x] Add an explicit initial consumer delivery-policy option.
+- [x] Default new consumers to `New` for RabbitMQ-compatible behavior.
+- [x] Preserve resume/backlog behavior for an existing durable consumer.
+- [x] Support explicit `All` configuration for intentional retained-message replay.
+- [x] Add focused tests proving default new-only behavior and explicit historical replay.
 
 Completion criteria:
 
-- [ ] A brand-new consumer does not receive messages published before its creation under default configuration.
-- [ ] An existing durable consumer resumes its stored delivery position.
-- [ ] Explicit `All` configuration receives retained historical messages.
-- [ ] The option and behavior are documented.
+- [x] A brand-new consumer does not receive messages published before its creation under default configuration.
+- [x] An existing durable consumer resumes its stored delivery position.
+- [x] Explicit `All` configuration receives retained historical messages.
+- [x] The option and behavior are documented.
+
+Verification record:
+
+- Regression-first check: `New_Consumer_Default_Should_Not_Receive_PreExisting_Retained_Message` was run before the production fix and failed because the new consumer received a retained pre-creation message (`received.Task.IsCompleted` was `True`, expected `False`).
+- Added `NatsDistributedEventBusOptions.InitialDeliveryPolicy`, defaulting to `ConsumerConfigDeliverPolicy.New`; it is applied only while creating a missing durable consumer.
+- Existing durable consumers continue through `GetConsumerAsync` without configuration mutation, preserving stored delivery position and backlog resume behavior.
+- The former implicit historical-replay test now explicitly configures `InitialDeliveryPolicy = ConsumerConfigDeliverPolicy.All`.
+- Added live coverage for default new-only behavior, explicit historical replay, and existing durable backlog resume. New tests use `[NatsFact]` and remain gated by `RUN_NATS_TESTS=true`.
+- Updated `README.md` and `docs/wiki.md` with the option, default `New` behavior, explicit `All` replay, and durable resume semantics.
+- Roslyn Debug build for the test project: succeeded with 0 warnings and 0 errors.
+- Focused delivery-policy tests with `RUN_NATS_TESTS=true`: 3 passed, 0 failed.
+- Full live test project with `RUN_NATS_TESTS=true`: 26 passed, 0 failed.
+- Normal test project without the NATS gate: 1 passed, 25 skipped, 0 failed.
+- `dotnet build TrueParser.Abp.Nats.slnx --no-restore`: succeeded with 0 warnings and 0 errors.
+- No message identity, Inbox/Outbox, event-name, notification, retention, redelivery, stream-management, or later hardening semantics were changed.
 
 ### 1.8 Retention and Fan-Out Configuration Validation Slice
 

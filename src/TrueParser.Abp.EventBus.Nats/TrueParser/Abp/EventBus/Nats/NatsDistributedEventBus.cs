@@ -241,15 +241,13 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                     }
                     catch (NatsJSApiException ex) when (ex.Error.Code == 404)
                     {
-                        // New consumer (first deployment of this event type).
-                        // DeliverPolicy.All ensures messages already retained in the
-                        // stream — kept alive by other consumers' Interest — are not
-                        // silently skipped. DeliverPolicy.New would miss that backlog.
+                        // New consumer (first deployment of this event type). The
+                        // configured initial policy applies only at creation time.
                         var consumerConfig = new ConsumerConfig(consumerName)
                         {
                             FilterSubject = subject,
                             AckPolicy = ConsumerConfigAckPolicy.Explicit,
-                            DeliverPolicy = ConsumerConfigDeliverPolicy.All
+                            DeliverPolicy = NatsOptions.InitialDeliveryPolicy
                         };
 
                         var prefetchCount = ParsePrefetchCount(NatsOptions.PrefetchCount);

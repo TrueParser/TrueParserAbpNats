@@ -63,7 +63,9 @@ public class MyModule : AbpModule { }
     "EventBus": {
       "Nats": {
         "StreamName": "MyAppEvents",
-        "SubjectPrefix": "MyApp.Events"
+        "SubjectPrefix": "MyApp.Events",
+        "ClientName": "my-service",
+        "InitialDeliveryPolicy": "New"
       }
     }
   }
@@ -129,7 +131,9 @@ public class MyModule : AbpModule { }
     "EventBus": {
       "Nats": {
         "StreamName": "MyAppEvents",
-        "SubjectPrefix": "MyApp.Events"
+        "SubjectPrefix": "MyApp.Events",
+        "ClientName": "my-service",
+        "InitialDeliveryPolicy": "New"
       }
     }
   }

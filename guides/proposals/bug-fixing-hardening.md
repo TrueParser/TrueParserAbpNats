@@ -4,6 +4,9 @@ Repository:
 
 `https://github.com/TrueParser/TrueParserAbpNats`
 
+## Compatibility:
+We dont need comaptibility. its a bran new package.
+
 ## Objective
 
 Harden `TrueParser.Abp.EventBus.Nats` into a reliable, reusable NATS JetStream transport for ABP Framework 10.6 that can replace `Volo.Abp.EventBus.RabbitMQ` with the **smallest possible application-code change**.

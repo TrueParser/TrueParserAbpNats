@@ -24,6 +24,12 @@ public class NatsDistributedEventBusOptions
 
     public string? PrefetchCount { get; set; }
 
+    /// <summary>
+    /// Controls where a newly created durable consumer starts in the stream.
+    /// Existing durable consumers resume from their stored position.
+    /// </summary>
+    public ConsumerConfigDeliverPolicy InitialDeliveryPolicy { get; set; } = ConsumerConfigDeliverPolicy.New;
+
     public NatsDistributedEventBusOptions()
     {
     }
