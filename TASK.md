@@ -635,7 +635,7 @@ Completion criteria:
 
 ### 1.13 NATS.Net Version Baseline Verification Slice
 
-Status: `[ ]` Pending.
+Status: `[x]` Complete.
 
 Problem statement:
 
@@ -644,16 +644,33 @@ silently introduce another NATS.Net version change or a mixed package graph.
 
 Scope:
 
-- [ ] Verify that all preceding implementation and verification work keeps `NATS.Net 3.2.0`.
-- [ ] Inspect direct and resolved package references for an unintended NATS.Net downgrade, upgrade, or version split.
-- [ ] Record the frozen `3.2.0` baseline and any package-resolution limitation.
-- [ ] Create no client-migration code or compatibility layer in this phase.
+- [x] Verify that all preceding implementation and verification work keeps `NATS.Net 3.2.0`.
+- [x] Inspect direct and resolved package references for an unintended NATS.Net downgrade, upgrade, or version split.
+- [x] Record the frozen `3.2.0` baseline and any package-resolution limitation.
+- [x] Create no client-migration code or compatibility layer in this phase.
+
+Verification record (2026-09-13):
+
+- `Directory.Packages.props` contains the sole active central NATS pin: `NATS.Net 3.2.0`.
+- `src/TrueParser.Abp.Nats` directly requests and resolves `NATS.Net 3.2.0`.
+- `src/TrueParser.Abp.EventBus.Nats` resolves `NATS.Net 3.2.0` transitively through the core package.
+- `test/TrueParser.Abp.EventBus.Nats.Tests` resolves `NATS.Net 3.2.0` transitively.
+- The resolved NATS client family is consistent at `3.2.0`: `NATS.Client.Abstractions`, `NATS.Client.Core`, `NATS.Client.Hosting`, `NATS.Client.JetStream`, `NATS.Client.KeyValueStore`, `NATS.Client.ObjectStore`, `NATS.Client.Serializers.Json`, `NATS.Client.Services`, `NATS.Client.Simplified`, and `NATS.Extensions.Microsoft.DependencyInjection`.
+- `NATS.NKeys 1.0.1` is an expected supporting package, not a mixed NATS client-family version.
+- Historical `2.5.3` references remain only in earlier migration history/proposal text and are not active package declarations.
+- No source, test, CI, tagging, or release workflow changes were required.
+
+Verification commands:
+
+- `dotnet restore TrueParser.Abp.Nats.slnx` — passed; all projects up to date after restore.
+- `dotnet list <project> package --include-transitive` for core, event-bus, and tests — passed; all active NATS client-family packages resolve to `3.2.0`.
+- `dotnet build TrueParser.Abp.Nats.slnx --configuration Release --no-restore` — passed with 0 warnings and 0 errors.
 
 Completion criteria:
 
-- [ ] The resolved NATS.Net baseline remains unchanged.
-- [ ] No NATS.Net major-version migration is mixed into this phase.
-- [ ] A later client upgrade, if desired, is isolated as a separate work item.
+- [x] The resolved NATS.Net baseline remains unchanged at `3.2.0`.
+- [x] No NATS.Net major-version migration is mixed into this phase.
+- [x] Any later client upgrade, if desired, remains isolated as a separate work item.
 
 ### 1.14 Documentation and Public Package Contract Slice
 
