@@ -165,6 +165,57 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
             await js.DeleteConsumerAsync(natsOpts.StreamName, anchorConsumerName);
         }
     }
+
+    [NatsFact]
+    public async Task Consumer_Should_Stop_And_Start_Again_After_Unsubscribe()
+    {
+        var eventName = $"Lifecycle.{Guid.NewGuid():N}";
+        var firstReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var firstSubscription = _distributedEventBus.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ => firstReceived.TrySetResult()));
+
+        try
+        {
+            var iterations = 0;
+            while (!firstReceived.Task.IsCompleted && iterations++ < 20)
+            {
+                await _distributedEventBus.PublishAsync(
+                    typeof(DynamicEventData),
+                    new DynamicEventData(eventName, new { Value = 1 }),
+                    onUnitOfWorkComplete: false,
+                    useOutbox: false);
+                await Task.Delay(100);
+            }
+
+            await firstReceived.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            firstSubscription.Dispose();
+        }
+
+        await Task.Delay(250);
+
+        var secondReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var secondSubscription = _distributedEventBus.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ => secondReceived.TrySetResult()));
+
+        var restartIterations = 0;
+        while (!secondReceived.Task.IsCompleted && restartIterations++ < 20)
+        {
+            await _distributedEventBus.PublishAsync(
+                typeof(DynamicEventData),
+                new DynamicEventData(eventName, new { Value = 2 }),
+                onUnitOfWorkComplete: false,
+                useOutbox: false);
+            await Task.Delay(100);
+        }
+
+        await secondReceived.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    }
 }
 
 [EventName("TestEvent")]

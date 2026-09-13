@@ -343,7 +343,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         _streamSemaphore.Dispose();
     }
 
-    private static Guid? GetTenantId(NatsJSMsg<byte[]> msg)
+    private static Guid? GetTenantId(INatsJSMsg<byte[]> msg)
     {
         var tenantIdValue = msg.Headers?.TryGetValue("Abp-Tenant-Id", out var values) == true
             ? values.FirstOrDefault()?.ToString()
@@ -451,7 +451,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         return prefetchCount;
     }
 
-    private async Task ProcessMessageAsync(string eventName, NatsJSMsg<byte[]> msg)
+    private async Task ProcessMessageAsync(string eventName, INatsJSMsg<byte[]> msg)
     {
         if (msg.Data == null) return;
 

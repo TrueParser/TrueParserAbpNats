@@ -118,7 +118,7 @@ Verification record:
 
 ### 1.1.1 NATS.Net 3.2.0 Major Upgrade Slice
 
-Status: `[ ]` Pending.
+Status: `[x]` Completed.
 
 Problem statement:
 
@@ -128,27 +128,74 @@ changes and the 3.2 release adds members to JetStream interfaces. Mixing that
 upgrade with the ABP 10.6 package migration or the transport hardening fixes
 would make compatibility failures difficult to attribute.
 
+Starting and target version record:
+
+- Old requested version: `2.5.3` from the central `Directory.Packages.props` pin.
+- Old resolved version: `2.5.3` for `NATS.Net` and the resolved NATS component family.
+- New requested version: `3.2.0` from the central `Directory.Packages.props` pin.
+- New resolved version: `3.2.0` for `NATS.Net`, `NATS.Client.Abstractions`, `NATS.Client.Core`, `NATS.Client.Hosting`, `NATS.Client.JetStream`, `NATS.Client.KeyValueStore`, `NATS.Client.ObjectStore`, `NATS.Client.Serializers.Json`, `NATS.Client.Services`, `NATS.Client.Simplified`, and `NATS.Extensions.Microsoft.DependencyInjection`.
+
+Official upstream compatibility audit:
+
+The official NATS.Net release notes and stable tag inventory were reviewed from
+`v2.5.3` through `v3.2.0`, including the published v2.5.x, v2.6.x, v2.7.x,
+v2.8.x, v3.0.x, v3.1.x, and v3.2.0 releases. Tags without a published GitHub
+release body were also checked and had no additional release notes to classify.
+
+| Upstream change | Affected repository API/symbol | Classification | Applicability and action | Regression test |
+| --- | --- | --- | --- | --- |
+| v2.5.3 URL authentication support | `NatsConnectionPool.CreateConnection` | OPTIONAL NEW CAPABILITY | Username/password and JWT/Seed options are used; URL credentials are not configured. No change. | Existing live connection tests |
+| v2.5.5-v2.5.6 JetStream publish/serializer fixes | `PublishToNatsAsync`, `INatsEventSerializer` boundary | JETSTREAM IMPACT; SERIALIZATION IMPACT | The repository uses byte payloads and the ABP serializer abstraction; no NATS serializer implementation is present. No source change. | Typed/dynamic live publish tests |
+| v2.5.7 DI serializer and pending-channel defaults | Direct `NatsConnection` in `NatsConnectionPool` | PERFORMANCE/BACKPRESSURE IMPACT; SERIALIZATION IMPACT | NATS DI builders are not used. No `SubscribeAsync` channel is created directly. No option change. | Live concurrency tests |
+| v2.5.9 ordered-consumer creation fix; v2.5.10 reconnect fix | `GetConsumerAsync`, `CreateOrUpdateConsumerAsync`, connection pool | JETSTREAM IMPACT; SHUTDOWN/LIFECYCLE IMPACT | The package uses a normal durable pull consumer and native reconnect behavior. No source change. | Live consumer and publish tests |
+| v2.5.12-v2.5.16 consumer pause, inbox leak, socket factory, and opt-in Direct request/reply | `NatsConnectionPool`, `NatsDistributedEventBus` | NOT USED BY THIS REPOSITORY; SHUTDOWN/LIFECYCLE IMPACT | No request/reply, custom socket, pause, or inbox subscription API is used. No source change. | Live lifecycle and concurrency tests |
+| v2.6.x consumer disposal/reconnect/503 fixes and JetStream retry corrections | `ConsumeAsync<byte[]>`, `AckAsync`, `NakAsync`, `PublishAsync` | JETSTREAM IMPACT; SHUTDOWN/LIFECYCLE IMPACT | Existing native APIs are retained; no retry or ACK policy was redesigned. | Full live JetStream suite |
+| v2.7.0 serialization move, timeout exception change, and `INatsJSConsumer` interface return | `ProcessMessageAsync`, `GetTenantId`, consume loop | SOURCE-COMPATIBILITY IMPACT; SERIALIZATION IMPACT | NATS.Net 3.2 compilation required both message parameters to accept `INatsJSMsg<byte[]>`. No timeout handling or serializer rewrite was needed. | Roslyn build and live suite |
+| v2.7.1 type forwarding for serializer interfaces | NATS serializer references | SOURCE-COMPATIBILITY IMPACT | No direct custom NATS serializer or old serializer assembly reference exists. No source change. | Solution build |
+| v2.7.2 slow-consumer handling and UTF-8 subject encoding | `ConsumeAsync<byte[]>`, `GetSubjectName` | PERFORMANCE/BACKPRESSURE IMPACT; JETSTREAM IMPACT | The event bus uses JetStream consume and valid generated subjects; no explicit channel override is required. | Live concurrency and wildcard tests |
+| v2.7.3 immediate consumer cancellation and interface optional-parameter changes | `ConsumeAsync<byte[]>(cancellationToken: ...)`, ACK/NAK calls | SHUTDOWN/LIFECYCLE IMPACT; SOURCE-COMPATIBILITY IMPACT | Existing immediate cancellation is preserved. Recompilation resolves the interface API; no drain option was enabled. | `Consumer_Should_Stop_And_Start_Again_After_Unsubscribe` |
+| v2.8.0 subject validation, NATS.NKeys split, consumer-dispose drain, and reset APIs | `GetSubjectName`, `NatsAuthOpts`, consumer lifecycle | SOURCE-COMPATIBILITY IMPACT; JETSTREAM IMPACT; SHUTDOWN/LIFECYCLE IMPACT | Generated subjects contain no whitespace; JWT/Seed authentication remains supported through the package; drain/reset features are not enabled or used. | Live publish, consumer, and lifecycle tests |
+| v2.8.1-v2.8.2 durable-create and ordered-push teardown fixes | `CreateOrUpdateConsumerAsync`, `ConsumeAsync` | JETSTREAM IMPACT; SHUTDOWN/LIFECYCLE IMPACT | The existing durable configuration supplies a name and is not an ordered push consumer. No source change. | Live retained-message and lifecycle tests |
+| v3.0.0 .NET 10 support, context-aware serializer opt-ins, socket abstraction move, Direct request/reply default, channel defaults, explicit drain, and DI dependency changes | `NatsConnectionPool`, `JetStreamContextAccessor`, `NatsHealthCheck`, event bus consume/publish paths | SOURCE-COMPATIBILITY IMPACT; PERFORMANCE/BACKPRESSURE IMPACT; SHUTDOWN/LIFECYCLE IMPACT; OPTIONAL NEW CAPABILITY | `net10.0` is supported. No request/reply, direct subscription, custom serializer, socket implementation, DI builder, or drain option is used. Existing behavior is preserved. | Roslyn build and full live suite |
+| v3.0.1 JetStream list cancellation fix and opt-in W3C baggage | No list enumeration or OTel registration | NOT USED BY THIS REPOSITORY; OPTIONAL NEW CAPABILITY | No applicable API is used. No source or package addition. | Package/build verification |
+| v3.1.0 `OnSubscribed` callback and dependency audit | `ConsumeAsync<byte[]>` consumer loop | NOT USED BY THIS REPOSITORY; OPTIONAL NEW CAPABILITY | The event bus relies on JetStream consumer startup, not Core `SubscribeAsync` handoff. No source change. | Live consumer startup tests |
+| v3.1.1 OTel receive fixes and object-store/empty-payload fixes | No OTel, object-store, or direct-get usage | NOT USED BY THIS REPOSITORY; OPTIONAL NEW CAPABILITY | No applicable API is used. No source change. | Full live suite |
+| v3.2.0 JetStream reset/sourcing fields and new members on `INatsJSStream`/`INatsJSConsumer` | Interfaces consumed by `NatsDistributedEventBus`; no direct implementers | JETSTREAM IMPACT; SOURCE-COMPATIBILITY IMPACT | Callers are unaffected and the repository supplies no direct test double or implementation. No source change. | Roslyn Release build and full live suite |
+
 Scope:
 
-- [ ] Start only after slice 1.1 has completed its ABP 10.6 restore, build, and focused-test checks.
-- [ ] Inventory direct and resolved NATS package references and record the current `2.5.3` baseline.
-- [ ] Upgrade the centrally managed `NATS.Net` package to `3.2.0` and keep all resolved NATS package versions internally consistent.
-- [ ] Use the official NATS.Net v3 upgrade notes, Roslyn MCP, and Graft to inspect affected symbols, JetStream interfaces, connection setup, headers, publishing, consuming, and test doubles.
-- [ ] Resolve only source or test compatibility changes required by the NATS.Net 3.2.0 upgrade.
-- [ ] Verify that the repository's .NET 10 target remains supported by the selected package.
-- [ ] Restore, build the solution, and run the focused test project with no unrelated transport-hardening changes.
-- [ ] Run live NATS tests when the environment gate and JetStream server are available; otherwise record that they were gated or skipped.
-- [ ] Do not silently downgrade to `2.5.3` if the upgrade fails; record the exact incompatibility and required maintainer decision.
+- [x] Start only after slice 1.1 has completed its ABP 10.6 restore, build, and focused-test checks.
+- [x] Inventory direct and resolved NATS package references and record the current `2.5.3` baseline.
+- [x] Upgrade the centrally managed `NATS.Net` package to `3.2.0` and keep all resolved NATS package versions internally consistent.
+- [x] Use the official NATS.Net v3 upgrade notes, Roslyn MCP, and Graft to inspect affected symbols, JetStream interfaces, connection setup, headers, publishing, consuming, and test doubles.
+- [x] Resolve only source or test compatibility changes required by the NATS.Net 3.2.0 upgrade.
+- [x] Verify that the repository's .NET 10 target remains supported by the selected package.
+- [x] Restore, build the solution, and run the focused test project with no unrelated transport-hardening changes.
+- [x] Run live NATS tests when the environment gate and JetStream server are available; otherwise record that they were gated or skipped.
+- [x] Do not silently downgrade to `2.5.3` if the upgrade fails; record the exact incompatibility and required maintainer decision.
 
 Completion criteria:
 
-- [ ] The resolved NATS client baseline is exactly `3.2.0`.
-- [ ] No unintended mixed NATS package versions remain.
-- [ ] Restore succeeds and the solution builds with zero new compiler errors.
-- [ ] Existing focused tests compile and their result is recorded.
-- [ ] Live NATS test execution or gating status is recorded explicitly.
-- [ ] No event-bus, JetStream, acknowledgement, identity, retention, or delivery semantics are intentionally changed in this slice.
-- [ ] The NATS.Net `3.2.0` baseline is frozen for the remainder of Phase 1 unless separately approved.
+- [x] The resolved NATS client baseline is exactly `3.2.0`.
+- [x] No unintended mixed NATS package versions remain.
+- [x] Restore succeeds and the solution builds with zero new compiler errors.
+- [x] Existing focused tests compile and their result is recorded.
+- [x] Live NATS test execution or gating status is recorded explicitly.
+- [x] No event-bus, JetStream, acknowledgement, identity, retention, or delivery semantics are intentionally changed in this slice.
+- [x] The NATS.Net `3.2.0` baseline is frozen for the remainder of Phase 1 unless separately approved.
+
+Verification record:
+
+- `dotnet restore TrueParser.Abp.Nats.slnx` — succeeded.
+- Immediate post-upgrade `dotnet build TrueParser.Abp.Nats.slnx --no-restore` — found one required concrete-to-interface incompatibility in `ProcessMessageAsync`.
+- Compatibility fix: changed only `ProcessMessageAsync` and `GetTenantId` parameters from `NatsJSMsg<byte[]>` to `INatsJSMsg<byte[]>`.
+- Final `dotnet build TrueParser.Abp.Nats.slnx --no-restore` — succeeded with 0 warnings and 0 errors.
+- Roslyn `BuildSolution` for the test project in Debug and Release — succeeded with 0 warnings and 0 errors.
+- Normal `dotnet test test\TrueParser.Abp.EventBus.Nats.Tests --no-build` — 1 passed, 8 explicitly skipped by the NATS gate.
+- Live `RUN_NATS_TESTS=true dotnet test test\TrueParser.Abp.EventBus.Nats.Tests --no-build` — 9 passed, 0 failed.
+- `dotnet pack` for both library projects — both packages created successfully.
+- Package metadata — `TrueParser.Abp.Nats` depends on `NATS.Net 3.2.0`; the event-bus package depends on the core package and ABP `10.6.0`.
+- Local NATS server was reachable on port `4222` during the live run; its version could not be read because the monitoring endpoint on port `8222` was unavailable.
 
 ### 1.2 Durable Consumer and Service Identity Slice
 
