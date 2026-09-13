@@ -132,6 +132,19 @@ public sealed class NatsConnectionIntegrationTests
         }
     }
 
+    [NatsFact]
+    public async Task Multiple_Requests_For_Same_ConnectionName_Should_Reuse_Connection()
+    {
+        await using var pool = new AbpNatsConnectionPool(Options.Create(CreateNamedConnectionOptions()));
+
+        var firstSecondaryConnection = await pool.GetAsync("Secondary");
+        var secondSecondaryConnection = await pool.GetAsync("Secondary");
+        var defaultConnection = await pool.GetAsync();
+
+        secondSecondaryConnection.ShouldBeSameAs(firstSecondaryConnection);
+        defaultConnection.ShouldNotBeSameAs(firstSecondaryConnection);
+    }
+
     private static AbpNatsOptions CreateNamedConnectionOptions()
     {
         return new AbpNatsOptions

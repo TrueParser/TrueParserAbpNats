@@ -75,7 +75,7 @@ Execute the numbered items one at a time.
 ## Current implementation status
 
 Status recorded on 2026-09-13. This proposal is **not complete**. The
-following twelve tests have been implemented and passed against the local
+following eighteen tests have been implemented and passed against the local
 JetStream-enabled NATS servers and the disposable MySQL test database:
 
 | Proposal test | Status | Implemented test |
@@ -92,14 +92,17 @@ JetStream-enabled NATS servers and the disposable MySQL test database:
 | 3.4 invalid JWT/Seed authentication | `[x]` Verified | `JwtSeed_Authentication_With_Invalid_Seed_Should_Fail` |
 | 4.1 default connection resolution | `[x]` Verified | `Default_Connection_Should_Resolve_Default_Server` |
 | 4.2 named connection resolution | `[x]` Verified | `Named_Connection_Should_Resolve_Configured_Server` |
+| 4.3 connection reuse | `[x]` Verified | `Multiple_Requests_For_Same_ConnectionName_Should_Reuse_Connection` |
+| 5.1 consumer recovery after NATS restart | `[x]` Verified | `Consumer_Should_Recover_After_NATS_Server_Restart` |
+| 5.2 publish during broker outage | `[x]` Verified | `Publish_During_Broker_Outage_Should_Fail_Or_Wait_According_To_NATS_Client_Semantics_Without_False_Success` |
+| 5.3 durable backlog recovery after restart | `[x]` Verified | `Durable_Consumer_Should_Resume_Backlog_After_Server_Restart` |
+| 6.1 bounded application shutdown | `[x]` Verified | `Application_Shutdown_Should_Stop_Consumers_Without_Hanging` |
+| 6.2 disposed event bus stops consuming | `[x]` Verified | `Disposed_EventBus_Should_No_Longer_Consume_Messages` |
 
-The following remain pending and must not be inferred as covered by the twelve
+The following remain pending and must not be inferred as covered by the eighteen
 tests above:
 
 ```text
-4.3 connection reuse
-5    broker disconnect, restart, and reconnect recovery
-6    complete shutdown lifecycle
 7    PublishManyFromOutboxAsync success and partial failure
 8    health-check behavior
 9    complete DistributedEventReceived notification matrix
@@ -116,15 +119,16 @@ methods for the six end-to-end tests.
 Verification snapshot:
 
 ```text
-Live suite:        56 passed, 0 failed, 0 skipped
-Broker-free suite: 2 passed, 0 failed, 54 skipped
+Live suite:        62 passed, 0 failed, 0 skipped
+Broker-free suite: 2 passed, 0 failed, 60 skipped
 ```
 
 The live tests remain gated by `NatsFact` and `RUN_NATS_TESTS=true`; the
 authentication and named-connection tests use temporary local WSL JetStream
 servers on isolated ports, with generated JWT/Seed material kept outside the
-repository. The tagging and package-publication workflow is not part of this
-proposal update.
+repository. Recovery and shutdown tests start and stop their own temporary WSL
+JetStream server processes with isolated persisted storage. The tagging and
+package-publication workflow is not part of this proposal update.
 
 ---
 
