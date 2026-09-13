@@ -28,6 +28,7 @@ public class TrueParserAbpEventBusNatsTestModule : AbpModule
             .CreateLogger();
 
         context.Services.AddLogging(logging => logging.AddSerilog(Log.Logger, dispose: true));
+        context.Services.AddSingleton<InMemoryEventInbox>();
 
         Configure<AbpNatsOptions>(options =>
         {

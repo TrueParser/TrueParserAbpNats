@@ -237,7 +237,7 @@ Verification record:
 
 ### 1.3 Stable Message and Event Identity Slice
 
-Status: `[ ]` Pending.
+Status: `[x]` Complete.
 
 Problem statement:
 
@@ -247,19 +247,31 @@ JetStream delivery, and redelivery.
 
 Scope:
 
-- [ ] Use `OutgoingEventInfo.Id` as the transport message ID for Outbox publishing.
-- [ ] Generate a stable direct-publish ID with the repository's `IGuidGenerator`.
-- [ ] Publish the ID in the `Nats-Msg-Id` header and preserve any required library or ABP message-id header.
-- [ ] Extract the ID on consumption and pass it to `AddToInboxAsync` unchanged.
-- [ ] Preserve correlation ID propagation across the same path.
-- [ ] Add focused tests for outbox identity, direct identity, duplicate publishing, redelivery, Inbox deduplication, and correlation propagation.
+- [x] Use `OutgoingEventInfo.Id` as the transport message ID for Outbox publishing.
+- [x] Generate a stable direct-publish ID with the repository's `IGuidGenerator`.
+- [x] Publish the ID in the `Nats-Msg-Id` header and preserve any required library or ABP message-id header.
+- [x] Extract the ID on consumption and pass it to `AddToInboxAsync` unchanged.
+- [x] Preserve correlation ID propagation across the same path.
+- [x] Add focused tests for outbox identity, direct identity, duplicate publishing, redelivery, Inbox deduplication, and correlation propagation.
 
 Completion criteria:
 
-- [ ] The identity chain is preserved from ABP Outbox through NATS and into ABP Inbox.
-- [ ] Repeated delivery of the same message does not execute the business handler twice when Inbox deduplication applies.
-- [ ] The transport does not rely on JetStream deduplication as a replacement for ABP Inbox.
-- [ ] Correlation IDs remain unchanged.
+- [x] The identity chain is preserved from ABP Outbox through NATS and into ABP Inbox.
+- [x] Repeated delivery of the same message does not execute the business handler twice when Inbox deduplication applies.
+- [x] The transport does not rely on JetStream deduplication as a replacement for ABP Inbox.
+- [x] Correlation IDs remain unchanged.
+
+Verification record:
+
+- Regression-first check: `Direct_Publish_Should_Include_A_Stable_Nats_Message_Id` consumed a direct event before the fix and failed because `Nats-Msg-Id` was null.
+- Direct publishes now use the repository `IGuidGenerator`; Outbox publishes use `OutgoingEventInfo.Id`; both are emitted as `Nats-Msg-Id`.
+- Consumption extracts `Nats-Msg-Id` and passes it unchanged to `AddToInboxAsync` alongside the existing correlation ID.
+- Added live coverage for direct IDs, Outbox IDs, receive-side Inbox propagation, and correlation preservation. Added an in-memory Inbox regression proving repeated message IDs are deduplicated by ABP Inbox rather than by transport behavior.
+- Roslyn Debug build for the test project: succeeded with 0 warnings and 0 errors.
+- Focused identity tests: 4 passed with `RUN_NATS_TESTS=true`.
+- Normal test project: 1 passed, 17 skipped by the NATS gate.
+- Full live test project: 18 passed, 0 failed.
+- No consumer identity, wildcard, delivery, retention, stream-management, poison-message, or distributed-event notification semantics were changed.
 
 ### 1.4 Actual Dynamic Event-Name Resolution Slice
 

@@ -35,6 +35,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
     protected INatsEventSerializer Serializer { get; }
     protected ILogger<NatsDistributedEventBus> Logger { get; set; }
 
+    private readonly IGuidGenerator _guidGenerator;
     protected ConcurrentDictionary<Type, List<IEventHandlerFactory>> HandlerFactories { get; }
     protected ConcurrentDictionary<string, List<IEventHandlerFactory>> DynamicHandlerFactories { get; }
     protected ConcurrentDictionary<string, Type> EventTypes { get; }
@@ -75,6 +76,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         JetStreamContextAccessor = jetStreamContextAccessor;
         Serializer = serializer;
         Logger = logger;
+        _guidGenerator = guidGenerator;
 
         HandlerFactories = new ConcurrentDictionary<Type, List<IEventHandlerFactory>>();
         DynamicHandlerFactories = new ConcurrentDictionary<string, List<IEventHandlerFactory>>();
@@ -486,6 +488,9 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         var correlationId = msg.Headers?.TryGetValue("Abp-Correlation-Id", out var values) == true
             ? values.FirstOrDefault()?.ToString()
             : null;
+        var messageId = msg.Headers?.TryGetValue("Nats-Msg-Id", out var messageIdValues) == true
+            ? messageIdValues.FirstOrDefault()?.ToString()
+            : null;
         var tenantId = GetTenantId(msg);
 
         using (CurrentTenant.Change(tenantId))
@@ -495,7 +500,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
             if (eventType != null)
             {
                 var eventData = Serializer.Deserialize(msg.Data, eventType);
-                if (await AddToInboxAsync(null, eventName, eventType, eventData, correlationId))
+                if (await AddToInboxAsync(messageId, eventName, eventType, eventData, correlationId))
                 {
                     return;
                 }
@@ -510,7 +515,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                 var rawData = Serializer.Deserialize<object>(msg.Data);
                 var dynamicEventData = new DynamicEventData(eventName, rawData);
 
-                if (await AddToInboxAsync(null, eventName, typeof(DynamicEventData), dynamicEventData, correlationId))
+                if (await AddToInboxAsync(messageId, eventName, typeof(DynamicEventData), dynamicEventData, correlationId))
                 {
                     return;
                 }
@@ -562,7 +567,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
             body = Serializer.Serialize(eventData);
         }
 
-        await PublishToNatsAsync(eventName, body);
+        await PublishToNatsAsync(eventName, body, messageId: _guidGenerator.Create().ToString());
 
         await TriggerDistributedEventSentAsync(new DistributedEventSent
         {
@@ -585,7 +590,11 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         return PublishAsync(typeof(DynamicEventData), dynamicEventData, onUnitOfWorkComplete);
     }
 
-    private async Task PublishToNatsAsync(string eventName, byte[] body, string? correlationId = null)
+    private async Task PublishToNatsAsync(
+        string eventName,
+        byte[] body,
+        string? correlationId = null,
+        string? messageId = null)
     {
         var subject = GetSubjectName(eventName);
         await EnsureStreamExistsAsync();
@@ -596,6 +605,11 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         if (!string.IsNullOrEmpty(correlationId))
         {
             headers.Add("Abp-Correlation-Id", correlationId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(messageId))
+        {
+            headers.Add("Nats-Msg-Id", messageId);
         }
 
         if (CurrentTenant.Id.HasValue)
@@ -610,7 +624,11 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
     public override async Task PublishFromOutboxAsync(OutgoingEventInfo outgoingEvent, OutboxConfig outboxConfig)
     {
-        await PublishToNatsAsync(outgoingEvent.EventName, outgoingEvent.EventData, outgoingEvent.GetCorrelationId());
+        await PublishToNatsAsync(
+            outgoingEvent.EventName,
+            outgoingEvent.EventData,
+            outgoingEvent.GetCorrelationId(),
+            outgoingEvent.Id.ToString());
 
         using (CorrelationIdProvider.Change(outgoingEvent.GetCorrelationId()))
         {

@@ -1,14 +1,23 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
+using System.Linq.Expressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NATS.Client.JetStream;
 using NATS.Client.JetStream.Models;
 using TrueParser.Abp.Nats;
 using Volo.Abp.EventBus;
 using Volo.Abp.EventBus.Distributed;
+using Volo.Abp.EventBus.Local;
+using Volo.Abp.Guids;
+using Volo.Abp.MultiTenancy;
+using Volo.Abp.Timing;
+using Volo.Abp.Tracing;
+using Volo.Abp.Uow;
 using Xunit;
 using Shouldly;
 using Microsoft.Extensions.DependencyInjection;
@@ -215,6 +224,212 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
         }
 
         await secondReceived.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    [NatsFact]
+    public async Task Direct_Publish_Should_Include_A_Stable_Nats_Message_Id()
+    {
+        var natsOptions = GetRequiredService<IOptions<NatsDistributedEventBusOptions>>().Value;
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync(natsOptions.ConnectionName);
+        var eventName = $"MessageIdentity.{Guid.NewGuid():N}";
+        var subject = $"{natsOptions.SubjectPrefix}.{eventName}";
+        var consumerName = $"MessageIdentity_{Guid.NewGuid():N}";
+
+        try
+        {
+            await js.CreateStreamAsync(new StreamConfig(natsOptions.StreamName, [$"{natsOptions.SubjectPrefix}.>"])
+            {
+                Retention = natsOptions.Retention,
+                NumReplicas = natsOptions.ReplicaCount
+            });
+        }
+        catch (NatsJSApiException ex) when (ex.Error.ErrCode == 10058)
+        {
+            // The test module normally creates the shared stream during startup.
+        }
+
+        var consumerConfig = new ConsumerConfig(consumerName)
+        {
+            FilterSubject = subject,
+            AckPolicy = ConsumerConfigAckPolicy.Explicit,
+            DeliverPolicy = ConsumerConfigDeliverPolicy.New
+        };
+        var consumer = await js.CreateOrUpdateConsumerAsync(natsOptions.StreamName, consumerConfig);
+
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            var messageTask = Task.Run(async () =>
+            {
+                await foreach (var message in consumer.ConsumeAsync<byte[]>(cancellationToken: cancellation.Token))
+                {
+                    await message.AckAsync();
+                    return message;
+                }
+
+                return null;
+            });
+
+            await _distributedEventBus.PublishAsync(
+                typeof(DynamicEventData),
+                new DynamicEventData(eventName, new { Value = 1 }),
+                onUnitOfWorkComplete: false,
+                useOutbox: false);
+
+            var message = await messageTask;
+            var messageId = message?.Headers?.TryGetValue("Nats-Msg-Id", out var values) == true
+                ? values.FirstOrDefault()?.ToString()
+                : null;
+
+            messageId.ShouldNotBeNullOrWhiteSpace();
+            Guid.TryParse(messageId, out _).ShouldBeTrue();
+        }
+        finally
+        {
+            await js.DeleteConsumerAsync(natsOptions.StreamName, consumerName);
+        }
+    }
+
+    [NatsFact]
+    public async Task Outbox_Publish_Should_Use_Outgoing_Event_Id_As_Nats_Message_Id()
+    {
+        var natsOptions = GetRequiredService<IOptions<NatsDistributedEventBusOptions>>().Value;
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync(natsOptions.ConnectionName);
+        var eventName = $"MessageIdentity.Outbox.{Guid.NewGuid():N}";
+        var subject = $"{natsOptions.SubjectPrefix}.{eventName}";
+        var consumerName = $"MessageIdentityOutbox_{Guid.NewGuid():N}";
+        try
+        {
+            await js.CreateStreamAsync(new StreamConfig(natsOptions.StreamName, [$"{natsOptions.SubjectPrefix}.>"])
+            {
+                Retention = natsOptions.Retention,
+                NumReplicas = natsOptions.ReplicaCount
+            });
+        }
+        catch (NatsJSApiException ex) when (ex.Error.ErrCode == 10058)
+        {
+            // The test module normally creates the shared stream during startup.
+        }
+
+        var consumerConfig = new ConsumerConfig(consumerName)
+        {
+            FilterSubject = subject,
+            AckPolicy = ConsumerConfigAckPolicy.Explicit,
+            DeliverPolicy = ConsumerConfigDeliverPolicy.New
+        };
+        var consumer = await js.CreateOrUpdateConsumerAsync(natsOptions.StreamName, consumerConfig);
+        var outgoingId = Guid.NewGuid();
+
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            var messageTask = Task.Run(async () =>
+            {
+                await foreach (var message in consumer.ConsumeAsync<byte[]>(cancellationToken: cancellation.Token))
+                {
+                    await message.AckAsync();
+                    return message;
+                }
+
+                return null;
+            });
+
+            var outgoingEvent = new OutgoingEventInfo(
+                outgoingId,
+                eventName,
+                JsonSerializer.SerializeToUtf8Bytes(new { Value = 2 }),
+                DateTime.UtcNow);
+            await GetRequiredService<NatsDistributedEventBus>()
+                .PublishFromOutboxAsync(outgoingEvent, new OutboxConfig("MessageIdentity"));
+
+            var message = await messageTask;
+            var messageId = message?.Headers?.TryGetValue("Nats-Msg-Id", out var values) == true
+                ? values.FirstOrDefault()?.ToString()
+                : null;
+
+            messageId.ShouldBe(outgoingId.ToString());
+        }
+        finally
+        {
+            await js.DeleteConsumerAsync(natsOptions.StreamName, consumerName);
+        }
+    }
+
+    [NatsFact]
+    public async Task Consumed_Message_Id_Should_Be_Passed_To_Abp_Inbox()
+    {
+        var natsOptions = GetRequiredService<IOptions<NatsDistributedEventBusOptions>>().Value;
+        var eventName = $"MessageIdentity.Inbox.{Guid.NewGuid():N}";
+        using var eventBus = ActivatorUtilities.CreateInstance<CapturingNatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = natsOptions.StreamName,
+                SubjectPrefix = natsOptions.SubjectPrefix,
+                ClientName = $"InboxCapture_{Guid.NewGuid():N}"
+            }));
+
+        var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var subscription = eventBus.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ => received.TrySetResult()));
+
+        await eventBus.InitializeAsync();
+        const string correlationId = "message-identity-correlation";
+        using (GetRequiredService<ICorrelationIdProvider>().Change(correlationId))
+        {
+            await _distributedEventBus.PublishAsync(
+                typeof(DynamicEventData),
+                new DynamicEventData(eventName, new { Value = 3 }),
+                onUnitOfWorkComplete: false,
+                useOutbox: false);
+        }
+
+        await received.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        eventBus.LastMessageId.ShouldNotBeNullOrWhiteSpace();
+        Guid.TryParse(eventBus.LastMessageId, out _).ShouldBeTrue();
+        eventBus.LastCorrelationId.ShouldBe(correlationId);
+    }
+
+    [NatsFact]
+    public async Task Abp_Inbox_Should_Deduplicate_Repeated_Message_Id()
+    {
+        var inboxOptions = new AbpDistributedEventBusOptions();
+        inboxOptions.Inboxes.Add(
+            "MessageIdentity",
+            new InboxConfig("MessageIdentity")
+            {
+                DatabaseName = "MessageIdentity",
+                ImplementationType = typeof(InMemoryEventInbox)
+            });
+
+        using var eventBus = ActivatorUtilities.CreateInstance<CapturingNatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = $"MessageIdentity_{Guid.NewGuid():N}",
+                SubjectPrefix = $"{Guid.NewGuid():N}.TrueParser.MessageIdentity.Events",
+                ClientName = "InboxDeduplication"
+            }),
+            Options.Create(inboxOptions));
+
+        var eventData = new DynamicEventData("MessageIdentity.Duplicate", new { Value = 4 });
+        var firstAdded = await eventBus.AddToInboxForTestAsync(
+            "stable-message-id",
+            eventData.EventName,
+            typeof(DynamicEventData),
+            eventData,
+            "correlation-id");
+        var secondAdded = await eventBus.AddToInboxForTestAsync(
+            "stable-message-id",
+            eventData.EventName,
+            typeof(DynamicEventData),
+            eventData,
+            "correlation-id");
+
+        firstAdded.ShouldBeTrue();
+        secondAdded.ShouldBeTrue();
+        GetRequiredService<InMemoryEventInbox>().EnqueueCount.ShouldBe(1);
     }
 
     [NatsFact]
@@ -448,4 +663,117 @@ public class RetainedEventHandler : IDistributedEventHandler<DynamicEventData>
         _onReceived(eventData);
         return Task.CompletedTask;
     }
+}
+
+public sealed class CapturingNatsDistributedEventBus : NatsDistributedEventBus
+{
+    public string? LastMessageId { get; private set; }
+    public string? LastCorrelationId { get; private set; }
+
+    public CapturingNatsDistributedEventBus(
+        IOptions<NatsDistributedEventBusOptions> natsOptions,
+        IJetStreamContextAccessor jetStreamContextAccessor,
+        INatsEventSerializer serializer,
+        IServiceScopeFactory serviceScopeFactory,
+        IOptions<AbpDistributedEventBusOptions> distributedEventBusOptions,
+        ICurrentTenant currentTenant,
+        IUnitOfWorkManager unitOfWorkManager,
+        IGuidGenerator guidGenerator,
+        IClock clock,
+        IEventHandlerInvoker eventHandlerInvoker,
+        ILocalEventBus localEventBus,
+        ICorrelationIdProvider correlationIdProvider,
+        ILogger<NatsDistributedEventBus> logger)
+        : base(
+            natsOptions,
+            jetStreamContextAccessor,
+            serializer,
+            serviceScopeFactory,
+            distributedEventBusOptions,
+            currentTenant,
+            unitOfWorkManager,
+            guidGenerator,
+            clock,
+            eventHandlerInvoker,
+            localEventBus,
+            correlationIdProvider,
+            logger)
+    {
+    }
+
+    protected override Task<bool> AddToInboxAsync(
+        string? messageId,
+        string eventName,
+        Type eventType,
+        object eventData,
+        string? correlationId)
+    {
+        LastMessageId = messageId;
+        LastCorrelationId = correlationId;
+        return Task.FromResult(false);
+    }
+
+    public Task<bool> AddToInboxForTestAsync(
+        string? messageId,
+        string eventName,
+        Type eventType,
+        object eventData,
+        string? correlationId)
+    {
+        return base.AddToInboxAsync(messageId, eventName, eventType, eventData, correlationId);
+    }
+}
+
+public sealed class InMemoryEventInbox : IEventInbox
+{
+    private readonly List<IncomingEventInfo> _events = new();
+    private readonly object _syncRoot = new();
+
+    public int EnqueueCount
+    {
+        get
+        {
+            lock (_syncRoot)
+            {
+                return _events.Count;
+            }
+        }
+    }
+
+    public Task EnqueueAsync(IncomingEventInfo incomingEvent)
+    {
+        lock (_syncRoot)
+        {
+            _events.Add(incomingEvent);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task<List<IncomingEventInfo>> GetWaitingEventsAsync(
+        int maxCount,
+        Expression<Func<IIncomingEventInfo, bool>>? filter = null,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_syncRoot)
+        {
+            return Task.FromResult(_events.Take(maxCount).ToList());
+        }
+    }
+
+    public Task MarkAsProcessedAsync(Guid id) => Task.CompletedTask;
+
+    public Task RetryLaterAsync(Guid id, int retryCount, DateTime? nextRetryTime) => Task.CompletedTask;
+
+    public Task MarkAsDiscardAsync(Guid id) => Task.CompletedTask;
+
+    public Task<bool> ExistsByMessageIdAsync(string messageId)
+    {
+        lock (_syncRoot)
+        {
+            return Task.FromResult(_events.Any(eventInfo => eventInfo.MessageId == messageId));
+        }
+    }
+
+    public Task DeleteOldEventsAsync() => Task.CompletedTask;
 }
