@@ -2,6 +2,8 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Text.RegularExpressions;
@@ -289,6 +291,8 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                         consumer = await js.CreateOrUpdateConsumerAsync(NatsOptions.StreamName, consumerConfig, shutdownToken);
                     }
 
+                    ValidateExistingConsumer(consumer, subject, consumerName);
+
                     startupSignal.TrySetResult();
 
                     await foreach (var msg in consumer.ConsumeAsync<byte[]>(cancellationToken: shutdownToken))
@@ -313,6 +317,11 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                 catch (OperationCanceledException) when (shutdownToken.IsCancellationRequested)
                 {
                     break;
+                }
+                catch (AbpException ex)
+                {
+                    startupSignal.TrySetException(ex);
+                    return;
                 }
                 catch (Exception ex)
                 {
@@ -537,7 +546,35 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
     private string GetConsumerName(string eventName)
     {
-        return SanitizeConsumerName($"{NatsOptions.StreamName}_{ResolveClientName()}_{eventName}");
+        var clientName = ResolveClientName();
+        var identity = string.Join("\0", NatsOptions.StreamName, clientName, eventName);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..10].ToLowerInvariant();
+        return SanitizeConsumerName($"{NatsOptions.StreamName}_{clientName}_{eventName}_{hash}");
+    }
+
+    private static void ValidateExistingConsumer(INatsJSConsumer consumer, string expectedSubject, string consumerName)
+    {
+        var differences = new List<string>();
+        var actualConfig = consumer.Info.Config;
+
+        if (!string.Equals(actualConfig.FilterSubject, expectedSubject, StringComparison.Ordinal))
+        {
+            differences.Add($"FilterSubject expected '{expectedSubject}' but was '{actualConfig.FilterSubject}'");
+        }
+
+        if (actualConfig.AckPolicy != ConsumerConfigAckPolicy.Explicit)
+        {
+            differences.Add($"AckPolicy expected '{ConsumerConfigAckPolicy.Explicit}' but was '{actualConfig.AckPolicy}'");
+        }
+
+        if (differences.Count > 0)
+        {
+            throw new AbpException(
+                $"Existing NATS JetStream consumer '{consumerName}' has incompatible configuration: " +
+                string.Join("; ", differences) +
+                ". Update the consumer or configure TrueParser:EventBus:Nats to match it. " +
+                "The existing consumer was not modified.");
+        }
     }
 
     private string ResolveClientName()
@@ -866,6 +903,16 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
     protected override Type? GetEventTypeByEventName(string eventName)
     {
         return EventTypes.GetOrDefault(eventName);
+    }
+
+    protected override Task OnAddToOutboxAsync(string eventName, Type eventType, object eventData)
+    {
+        if (eventType != typeof(DynamicEventData))
+        {
+            EventTypes.GetOrAdd(eventName, eventType);
+        }
+
+        return base.OnAddToOutboxAsync(eventName, eventType, eventData);
     }
 
     // ── Serialization ─────────────────────────────────────────────────────────

@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Text.Json;
@@ -225,6 +227,16 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
             eventName,
             eventData,
             DateTime.UtcNow);
+    }
+
+    private static string GetExpectedConsumerName(string streamName, string clientName, string eventName)
+    {
+        var identity = string.Join("\0", streamName, clientName, eventName);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..10].ToLowerInvariant();
+        return System.Text.RegularExpressions.Regex.Replace(
+            $"{streamName}_{clientName}_{eventName}_{hash}",
+            @"[^a-zA-Z0-9\-_]",
+            "_");
     }
 
     [NatsFact]
@@ -832,14 +844,8 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
         await eventBusB.InitializeAsync();
 
         var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
-        var consumerNameA = System.Text.RegularExpressions.Regex.Replace(
-            $"{streamName}_{clientNameA}_{eventName}",
-            @"[^a-zA-Z0-9\-_]",
-            "_");
-        var consumerNameB = System.Text.RegularExpressions.Regex.Replace(
-            $"{streamName}_{clientNameB}_{eventName}",
-            @"[^a-zA-Z0-9\-_]",
-            "_");
+        var consumerNameA = GetExpectedConsumerName(streamName, clientNameA, eventName);
+        var consumerNameB = GetExpectedConsumerName(streamName, clientNameB, eventName);
 
         var consumersReady = false;
         for (var iteration = 0; iteration < 50 && !consumersReady; iteration++)
@@ -915,10 +921,7 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
         await eventBusB.InitializeAsync();
 
         var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
-        var consumerName = System.Text.RegularExpressions.Regex.Replace(
-            $"{streamName}_{clientName}_{eventName}",
-            @"[^a-zA-Z0-9\-_]",
-            "_");
+        var consumerName = GetExpectedConsumerName(streamName, clientName, eventName);
 
         var consumerReady = false;
         for (var iteration = 0; iteration < 50 && !consumerReady; iteration++)
@@ -965,10 +968,7 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
         var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.ConsumerValidation.Events";
         var eventName = "Order.Created";
         var clientName = "ConsumerValidation-Service";
-        var consumerName = System.Text.RegularExpressions.Regex.Replace(
-            $"{streamName}_{clientName}_{eventName}",
-            @"[^a-zA-Z0-9\-_]",
-            "_");
+        var consumerName = GetExpectedConsumerName(streamName, clientName, eventName);
         var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
 
         await js.CreateStreamAsync(new StreamConfig(streamName, [$"{subjectPrefix}.>"])
@@ -1311,10 +1311,7 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
 
         await eventBus.InitializeAsync();
 
-        var consumerName = System.Text.RegularExpressions.Regex.Replace(
-            $"{streamName}_{clientName}_{eventName}",
-            @"[^a-zA-Z0-9\-_]",
-            "_");
+        var consumerName = GetExpectedConsumerName(streamName, clientName, eventName);
         var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
         var consumer = await js.GetConsumerAsync(streamName, consumerName);
 
@@ -1352,10 +1349,7 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
 
         await eventBus.InitializeAsync();
 
-        var consumerName = System.Text.RegularExpressions.Regex.Replace(
-            $"{streamName}_{clientName}_{eventName}",
-            @"[^a-zA-Z0-9\-_]",
-            "_");
+        var consumerName = GetExpectedConsumerName(streamName, clientName, eventName);
         var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
         var consumer = await js.GetConsumerAsync(streamName, consumerName);
 
