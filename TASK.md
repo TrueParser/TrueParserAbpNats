@@ -582,7 +582,7 @@ Verification record:
 
 ### 1.12 ABP RabbitMQ Parity Audit Slice
 
-Status: `[ ]` Pending.
+Status: `[x]` Complete.
 
 Problem statement:
 
@@ -592,18 +592,46 @@ and justified rather than being accidental parity gaps.
 
 Scope:
 
-- [ ] Use ABP 10.6 `RabbitMqDistributedEventBus` as the behavioral reference.
-- [ ] Compare publishing, Outbox, Inbox, unit-of-work, subscription, dynamic-event, tenant/correlation, and distributed-event notification behavior.
-- [ ] Use Roslyn MCP for symbol and call-flow analysis and Graft for repository context.
-- [ ] Classify each difference as broker-specific, intentional NATS enhancement, or bug/parity gap.
-- [ ] Fix the gaps that belong in this phase or record an explicit maintainer-approved follow-up.
-- [ ] Record the parity matrix in repository documentation or this `TASK.md` without claiming unverified equivalence.
+- [x] Use ABP 10.6 `RabbitMqDistributedEventBus` as the behavioral reference.
+- [x] Compare publishing, Outbox, Inbox, unit-of-work, subscription, dynamic-event, tenant/correlation, and distributed-event notification behavior.
+- [x] Use Roslyn MCP for symbol and call-flow analysis and Graft for repository context.
+- [x] Classify each difference as broker-specific, intentional NATS enhancement, or bug/parity gap.
+- [x] Fix the gap that belongs in this phase.
+- [x] Record the parity matrix in this `TASK.md` without claiming unverified equivalence.
+
+Reference implementation:
+
+- ABP 10.6.0 `RabbitMqDistributedEventBus`: https://raw.githubusercontent.com/abpframework/abp/10.6.0/framework/src/Volo.Abp.EventBus.RabbitMQ/Volo/Abp/EventBus/RabbitMq/RabbitMqDistributedEventBus.cs
+- ABP 10.6.0 `DistributedEventBusBase`: https://raw.githubusercontent.com/abpframework/abp/10.6.0/framework/src/Volo.Abp.EventBus/Volo/Abp/EventBus/Distributed/DistributedEventBusBase.cs
+
+Parity matrix:
+
+| Area | NATS implementation compared with ABP RabbitMQ | Classification | Result / evidence |
+|---|---|---|---|
+| Broker topology and initialization | NATS creates/validates a JetStream stream and starts per-event durable consumers; RabbitMQ declares one durable exchange/queue and binds routing keys. | Broker-specific | Required topology difference; no ABP event semantic change. |
+| Service identity | NATS derives `{StreamName}_{ClientName}_{EventName}` durable consumers from the required event-bus `ClientName`; RabbitMQ uses its configured client name as the durable queue name. | Broker-specific adaptation | The explicit NATS identity contract is covered by slice 1.2; no legacy fallback is used. |
+| Typed publish | Both resolve the ABP event name, serialize the payload, preserve correlation, and publish durably. NATS uses JetStream publish acknowledgement; RabbitMQ uses persistent messages. | Broker-specific transport | Semantic intent preserved. |
+| Dynamic publish | Both publish the actual dynamic event name and serialize only the payload. | Equivalent | NATS subject routing carries the event name. |
+| Direct `DistributedEventSent` | Both rely on the ABP base direct-publish notification; Outbox sends an explicit Outbox notification. | Equivalent | Existing 1.6 regression coverage remains green. |
+| Outbox single publish | Both use `OutgoingEventInfo.Id` as the broker message identity, preserve correlation, publish, and emit `DistributedEventSent` with `Source=Outbox`. | Equivalent | Existing message-ID and notification regressions remain green. |
+| Outbox batch publish | RabbitMQ uses publisher-confirmation channel throttling; NATS publishes each event sequentially and awaits JetStream acknowledgement. | Broker-specific / performance | Reliability semantics are preserved; batching optimization is not introduced in this audit. |
+| Unit of work | Both call `AddOrReplaceDistributedEvent` for deferred distributed events. | Equivalent | No change required. |
+| Typed subscription | RabbitMQ binds a routing key; NATS starts a filtered durable JetStream consumer. | Broker-specific transport | Handler registration and dispatch intent are preserved. |
+| Dynamic subscription | RabbitMQ binds exact dynamic names. NATS supports exact names and subject wildcards, then resolves the actual event name from the subject. | Intentional NATS enhancement | Required by NATS subject semantics and covered by wildcard tests. |
+| Direct typed receive | Both deserialize the registered type, enqueue to ABP Inbox when configured, otherwise use ABP direct handler dispatch. | Equivalent | NATS preserves tenant/correlation scope around dispatch. |
+| Direct dynamic receive | Both deserialize to `DynamicEventData` for handlers and ignore events with no matching registration. | Equivalent with NATS wildcard enhancement | NATS matches wildcard registrations; no unrelated handler is invoked. |
+| `DistributedEventReceived` payload | ABP base dispatch exposes the raw payload for dynamic events. NATS previously exposed the wrapper from its manual dynamic path. | Bug/parity gap | Fixed `EventData` to `dynamicEventData.Data`; the new live regression was red before the fix and green after it. |
+| Inbox processing | Both deserialize typed events, resolve registered dynamic handlers, execute through ABP Inbox dispatch, preserve correlation, and rethrow handler exceptions. | Equivalent with NATS wildcard enhancement | Existing typed, dynamic, wildcard, and unknown-event Inbox tests remain green. |
+| Correlation | RabbitMQ stores correlation in AMQP basic properties; NATS stores it in `Abp-Correlation-Id` and restores the ABP provider scope. | Broker-specific representation | Semantic propagation preserved. |
+| Tenant propagation | NATS writes `Abp-Tenant-Id` and restores `ICurrentTenant` during receive. The ABP 10.6 RabbitMQ source does not add an equivalent tenant header/scope in this class. | Intentional NATS enhancement | Existing live tenant round-trip coverage remains green. |
+| Acknowledgement and failure | RabbitMQ delegates acknowledgement/requeue behavior to its message consumer; NATS explicitly ACKs successful processing and NAKs failures. | Broker-specific transport | Existing redelivery/poison controls remain unchanged. |
+| Unsubscribe/lifecycle | RabbitMQ leaves unbinding as an upstream TODO; NATS stops an event consumer when its last handler is removed and cancels it on shutdown. | Intentional NATS lifecycle behavior | Existing lifecycle and thread-safety coverage remains green. |
 
 Completion criteria:
 
-- [ ] Every material behavior difference has an explicit reason.
-- [ ] Required parity gaps from this phase are fixed and focused-tested.
-- [ ] Any remaining difference has a documented owner, rationale, and follow-up scope.
+- [x] Every material behavior difference has an explicit reason.
+- [x] Required parity gaps from this phase are fixed and focused-tested.
+- [x] Any remaining difference has a documented classification and rationale; no follow-up code was required by this audit.
 
 ### 1.13 NATS.Net Version Baseline Verification Slice
 

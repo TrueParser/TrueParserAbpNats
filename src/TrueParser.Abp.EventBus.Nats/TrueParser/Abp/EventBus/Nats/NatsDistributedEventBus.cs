@@ -607,7 +607,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                     {
                         Source = DistributedEventSource.Direct,
                         EventName = eventName,
-                        EventData = dynamicEventData
+                        EventData = dynamicEventData.Data
                     });
 
                     var exceptions = new List<Exception>();

@@ -560,6 +560,41 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
     }
 
     [NatsFact]
+    public async Task Dynamic_Direct_Receive_Notification_Should_Expose_Raw_Event_Data()
+    {
+        var eventName = $"NotificationParity.Receive.{Guid.NewGuid():N}";
+        var notification = new TaskCompletionSource<DistributedEventReceived>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var localEventBus = GetRequiredService<ILocalEventBus>();
+
+        using var notificationSubscription = localEventBus.Subscribe<DistributedEventReceived>(eventData =>
+        {
+            if (eventData.EventName == eventName)
+            {
+                notification.TrySetResult(eventData);
+            }
+
+            return Task.CompletedTask;
+        });
+        using var handlerSubscription = _distributedEventBus.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ => { }));
+
+        for (var attempt = 0; attempt < 20 && !notification.Task.IsCompleted; attempt++)
+        {
+            await _distributedEventBus.PublishAsync(
+                typeof(DynamicEventData),
+                new DynamicEventData(eventName, new { Value = 3 }),
+                onUnitOfWorkComplete: false,
+                useOutbox: false);
+            await Task.Delay(100);
+        }
+
+        var received = await notification.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        received.Source.ShouldBe(DistributedEventSource.Direct);
+        received.EventData.ShouldNotBeOfType<DynamicEventData>();
+    }
+
+    [NatsFact]
     public async Task Outbox_Publish_Should_Trigger_DistributedEventSent_Exactly_Once_From_Outbox()
     {
         var eventName = $"NotificationParity.Outbox.{Guid.NewGuid():N}";
