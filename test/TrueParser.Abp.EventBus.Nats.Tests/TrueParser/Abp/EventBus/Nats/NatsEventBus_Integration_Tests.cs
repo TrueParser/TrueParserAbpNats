@@ -405,6 +405,61 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
     }
 
     [NatsFact]
+    public async Task Direct_Publish_Should_Trigger_DistributedEventSent_Exactly_Once()
+    {
+        var eventName = $"NotificationParity.Direct.{Guid.NewGuid():N}";
+        var notifications = new ConcurrentQueue<DistributedEventSent>();
+        var localEventBus = GetRequiredService<ILocalEventBus>();
+        using var subscription = localEventBus.Subscribe<DistributedEventSent>(eventData =>
+        {
+            if (eventData.EventName == eventName)
+            {
+                notifications.Enqueue(eventData);
+            }
+
+            return Task.CompletedTask;
+        });
+
+        await _distributedEventBus.PublishAsync(
+            typeof(DynamicEventData),
+            new DynamicEventData(eventName, new { Value = 1 }),
+            onUnitOfWorkComplete: false,
+            useOutbox: false);
+
+        notifications.Count.ShouldBe(1);
+        notifications.Single().Source.ShouldBe(DistributedEventSource.Direct);
+    }
+
+    [NatsFact]
+    public async Task Outbox_Publish_Should_Trigger_DistributedEventSent_Exactly_Once_From_Outbox()
+    {
+        var eventName = $"NotificationParity.Outbox.{Guid.NewGuid():N}";
+        var notifications = new ConcurrentQueue<DistributedEventSent>();
+        var localEventBus = GetRequiredService<ILocalEventBus>();
+        using var subscription = localEventBus.Subscribe<DistributedEventSent>(eventData =>
+        {
+            if (eventData.EventName == eventName)
+            {
+                notifications.Enqueue(eventData);
+            }
+
+            return Task.CompletedTask;
+        });
+
+        var outgoingEvent = new OutgoingEventInfo(
+            Guid.NewGuid(),
+            eventName,
+            JsonSerializer.SerializeToUtf8Bytes(new { Value = 2 }),
+            DateTime.UtcNow);
+
+        await GetRequiredService<NatsDistributedEventBus>()
+            .PublishFromOutboxAsync(outgoingEvent, new OutboxConfig("NotificationParity"));
+
+        notifications.Count.ShouldBe(1);
+        notifications.Single().Source.ShouldBe(DistributedEventSource.Outbox);
+    }
+
+    [NatsFact]
     public async Task Outbox_Publish_Should_Use_Outgoing_Event_Id_As_Nats_Message_Id()
     {
         var natsOptions = GetRequiredService<IOptions<NatsDistributedEventBusOptions>>().Value;

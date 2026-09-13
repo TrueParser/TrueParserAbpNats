@@ -347,7 +347,7 @@ Verification record:
 
 ### 1.6 DistributedEventSent Notification Parity Slice
 
-Status: `[ ]` Pending.
+Status: `[x]` Complete.
 
 Problem statement:
 
@@ -357,16 +357,31 @@ which can produce duplicate direct-publish notifications.
 
 Scope:
 
-- [ ] Make `PublishToEventBusAsync` transport-only after serialization and JetStream publication.
-- [ ] Remove the duplicate transport-level notification.
-- [ ] Preserve the explicit Outbox-sourced notification in `PublishFromOutboxAsync` where ABP parity requires it.
-- [ ] Add focused tests that count direct and Outbox notifications and assert their sources.
+- [x] Make `PublishToEventBusAsync` transport-only after serialization and JetStream publication.
+- [x] Remove the duplicate transport-level notification.
+- [x] Preserve the explicit Outbox-sourced notification in `PublishFromOutboxAsync` where ABP parity requires it.
+- [x] Add focused tests that count direct and Outbox notifications and assert their sources.
 
 Completion criteria:
 
-- [ ] Direct publishing produces exactly one `DistributedEventSent` notification.
-- [ ] Outbox publishing produces exactly one correctly sourced notification.
-- [ ] No unrelated publish or handler behavior changes.
+- [x] Direct publishing produces exactly one `DistributedEventSent` notification.
+- [x] Outbox publishing produces exactly one correctly sourced notification.
+- [x] No unrelated publish or handler behavior changes.
+
+Verification record:
+
+- Regression-first check: the direct notification test was run before the fix and failed because two `DistributedEventSent` notifications were observed instead of one.
+- `PublishToEventBusAsync` is now transport-only after JetStream publication. ABP's `DistributedEventBusBase.PublishAsync` remains the sole source of the direct `Source.Direct` notification.
+- `PublishFromOutboxAsync` retains its explicit single `Source.Outbox` notification.
+- Added focused coverage through `ILocalEventBus` for exact direct and Outbox notification counts and sources.
+- All new tests use the existing `[NatsFact]` / `RUN_NATS_TESTS=true` gate. Normal test execution does not exercise them.
+- Roslyn Debug build for the test project: succeeded with 0 warnings and 0 errors.
+- Focused direct notification test with `RUN_NATS_TESTS=true`: passed after reproducing the pre-fix duplicate.
+- Focused Outbox notification test with `RUN_NATS_TESTS=true`: passed.
+- Full live test project with `RUN_NATS_TESTS=true`: 24 passed, 0 failed.
+- Normal test project without the NATS gate: 1 passed, 23 skipped by the existing live-test gate.
+- `dotnet build TrueParser.Abp.Nats.slnx --no-restore`: succeeded with 0 warnings and 0 errors.
+- No event identity, Inbox/Outbox processing, delivery-policy, retention, redelivery, stream-management, or later hardening semantics were changed.
 
 ### 1.7 Explicit Initial Consumer Delivery Policy Slice
 

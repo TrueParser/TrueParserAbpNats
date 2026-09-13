@@ -569,13 +569,6 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         }
 
         await PublishToNatsAsync(eventName, body, messageId: _guidGenerator.Create().ToString());
-
-        await TriggerDistributedEventSentAsync(new DistributedEventSent
-        {
-            Source = DistributedEventSource.Direct,
-            EventName = eventName,
-            EventData = eventData
-        });
     }
 
     public override Task PublishAsync(string eventName, object eventData, bool onUnitOfWorkComplete = true)
