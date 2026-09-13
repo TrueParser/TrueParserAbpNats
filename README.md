@@ -65,7 +65,10 @@ public class MyModule : AbpModule { }
         "StreamName": "MyAppEvents",
         "SubjectPrefix": "MyApp.Events",
         "ClientName": "my-service",
-        "InitialDeliveryPolicy": "New"
+        "InitialDeliveryPolicy": "New",
+        "AckWait": null,
+        "MaxDeliver": null,
+        "BackOff": null
       }
     }
   }
@@ -133,7 +136,10 @@ public class MyModule : AbpModule { }
         "StreamName": "MyAppEvents",
         "SubjectPrefix": "MyApp.Events",
         "ClientName": "my-service",
-        "InitialDeliveryPolicy": "New"
+        "InitialDeliveryPolicy": "New",
+        "AckWait": null,
+        "MaxDeliver": null,
+        "BackOff": null
       }
     }
   }

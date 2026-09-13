@@ -120,6 +120,9 @@ independent fan-out copies.
         "ClientName": "my-service",
         "ConnectionName": null,
         "InitialDeliveryPolicy": "New",
+        "AckWait": null,
+        "MaxDeliver": null,
+        "BackOff": null,
         "Retention": "Interest",
         "ReplicaCount": 1,
         "MaxAge": null
@@ -136,6 +139,9 @@ independent fan-out copies.
 | `ClientName` | _(required)_ | Stable logical service identity used in durable consumer names |
 | `ConnectionName` | `null` (uses default) | Which named NATS connection to use |
 | `InitialDeliveryPolicy` | `New` | Starting policy for a brand-new durable consumer: `New` or `All` |
+| `AckWait` | `null` | Maximum unacknowledged duration before redelivery; null preserves the NATS default |
+| `MaxDeliver` | `null` | Maximum delivery attempts; null preserves the native unlimited-redelivery default |
+| `BackOff` | `null` | Optional acknowledgment-timeout redelivery delays, in order |
 | `Retention` | `Interest` | `Interest` (default) or `Limits`; `Workqueue` is rejected — see below |
 | `ReplicaCount` | `1` | Number of stream replicas (use 3 for HA clusters) |
 | `MaxAge` | `null` | Max message retention (e.g. `"24h"`) |
@@ -165,6 +171,19 @@ resumes its stored delivery position and backlog.
 
 Set `InitialDeliveryPolicy` to `All` when a service intentionally needs to
 replay retained historical messages while creating a new durable consumer.
+
+#### Redelivery and poison messages
+
+`AckWait`, `MaxDeliver`, and `BackOff` are applied to newly created durable
+consumers. Null values preserve the NATS server defaults. `BackOff` is a
+sequence of durations and controls acknowledgment-timeout redelivery; the
+first backoff value becomes the effective acknowledgment wait. Handler
+failures are negatively acknowledged by the event bus and remain eligible for
+redelivery, with `MaxDeliver` providing an optional bound.
+
+After a message reaches `MaxDeliver`, JetStream keeps it in the stream. This
+package does not create a custom dead-letter queue; applications may use their
+own advisory or dead-letter handling when required.
 
 ---
 

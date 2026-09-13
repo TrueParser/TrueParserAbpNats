@@ -948,6 +948,203 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
         exception.Message.ShouldContain("Workqueue");
         exception.Message.ShouldContain("Interest");
     }
+
+    [NatsFact]
+    public async Task Configured_Redelivery_Controls_Should_Be_Applied_To_New_Consumer()
+    {
+        var streamName = $"Redelivery_{Guid.NewGuid():N}";
+        var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Redelivery.Events";
+        var eventName = "Configured.Controls";
+        var clientName = "Redelivery-Configured";
+        var ackWait = TimeSpan.FromMilliseconds(750);
+        var maxDeliver = 4L;
+
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = streamName,
+                SubjectPrefix = subjectPrefix,
+                ClientName = clientName,
+                AckWait = ackWait,
+                MaxDeliver = maxDeliver
+            }));
+        using var subscription = eventBus.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ => { }));
+
+        await eventBus.InitializeAsync();
+
+        var consumerName = System.Text.RegularExpressions.Regex.Replace(
+            $"{streamName}_{clientName}_{eventName}",
+            @"[^a-zA-Z0-9\-_]",
+            "_");
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+        var consumer = await js.GetConsumerAsync(streamName, consumerName);
+
+        consumer.Info.Config.AckWait.ShouldBe(ackWait);
+        consumer.Info.Config.MaxDeliver.ShouldBe(maxDeliver);
+    }
+
+    [NatsFact]
+    public async Task Configured_BackOff_Should_Be_Applied_To_New_Consumer()
+    {
+        var streamName = $"Redelivery_{Guid.NewGuid():N}";
+        var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Redelivery.Events";
+        var eventName = "Configured.BackOff";
+        var clientName = "Redelivery-BackOff";
+        var backOff = new[]
+        {
+            TimeSpan.FromMilliseconds(100),
+            TimeSpan.FromMilliseconds(200),
+            TimeSpan.FromMilliseconds(400)
+        };
+
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = streamName,
+                SubjectPrefix = subjectPrefix,
+                ClientName = clientName,
+                MaxDeliver = 3,
+                BackOff = backOff
+            }));
+        using var subscription = eventBus.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ => { }));
+
+        await eventBus.InitializeAsync();
+
+        var consumerName = System.Text.RegularExpressions.Regex.Replace(
+            $"{streamName}_{clientName}_{eventName}",
+            @"[^a-zA-Z0-9\-_]",
+            "_");
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+        var consumer = await js.GetConsumerAsync(streamName, consumerName);
+
+        consumer.Info.Config.Backoff.ShouldNotBeNull();
+        consumer.Info.Config.Backoff!.ToArray().ShouldBe(backOff);
+        consumer.Info.Config.AckWait.ShouldBe(backOff[0]);
+    }
+
+    [NatsFact]
+    public async Task Handler_Failure_Should_Redeliver_And_Then_Acknowledge_On_Success()
+    {
+        var eventName = $"Redelivery.Transient.{Guid.NewGuid():N}";
+        var attempts = 0;
+        var succeeded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = $"Redelivery_{Guid.NewGuid():N}",
+                SubjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Redelivery.Events",
+                ClientName = "RedeliveryTransient",
+                MaxDeliver = 3
+            }));
+        using var subscription = eventBus.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ =>
+            {
+                if (Interlocked.Increment(ref attempts) == 1)
+                {
+                    throw new InvalidOperationException("transient test failure");
+                }
+
+                succeeded.TrySetResult();
+            }));
+
+        await eventBus.InitializeAsync();
+        await eventBus.PublishAsync(
+            typeof(DynamicEventData),
+            new DynamicEventData(eventName, new { Value = 1 }),
+            onUnitOfWorkComplete: false,
+            useOutbox: false);
+
+        await succeeded.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.Delay(500);
+        attempts.ShouldBe(2);
+    }
+
+    [NatsFact]
+    public async Task Successful_Handler_Should_Acknowledge_And_Stop_Redelivery()
+    {
+        var eventName = $"Redelivery.Success.{Guid.NewGuid():N}";
+        var attempts = 0;
+        var acknowledged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = $"Redelivery_{Guid.NewGuid():N}",
+                SubjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Redelivery.Events",
+                ClientName = "RedeliverySuccess",
+                AckWait = TimeSpan.FromMilliseconds(100),
+                MaxDeliver = 3
+            }));
+        using var subscription = eventBus.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ =>
+            {
+                Interlocked.Increment(ref attempts);
+                acknowledged.TrySetResult();
+            }));
+
+        await eventBus.InitializeAsync();
+        await eventBus.PublishAsync(
+            typeof(DynamicEventData),
+            new DynamicEventData(eventName, new { Value = 1 }),
+            onUnitOfWorkComplete: false,
+            useOutbox: false);
+
+        await acknowledged.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.Delay(500);
+        attempts.ShouldBe(1);
+    }
+
+    [NatsFact]
+    public async Task Configured_MaxDeliver_Should_Stop_Poison_Message_Redelivery()
+    {
+        var eventName = $"Redelivery.Poison.{Guid.NewGuid():N}";
+        var attempts = 0;
+        var maxDeliveriesReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = $"Redelivery_{Guid.NewGuid():N}",
+                SubjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Redelivery.Events",
+                ClientName = "RedeliveryPoison",
+                AckWait = TimeSpan.FromMilliseconds(100),
+                MaxDeliver = 2
+            }));
+        using var subscription = eventBus.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ =>
+            {
+                if (Interlocked.Increment(ref attempts) >= 2)
+                {
+                    maxDeliveriesReached.TrySetResult();
+                }
+
+                throw new InvalidOperationException("poison test failure");
+            }));
+
+        await eventBus.InitializeAsync();
+        await eventBus.PublishAsync(
+            typeof(DynamicEventData),
+            new DynamicEventData(eventName, new { Value = 1 }),
+            onUnitOfWorkComplete: false,
+            useOutbox: false);
+
+        await maxDeliveriesReached.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.Delay(500);
+        attempts.ShouldBe(2);
+    }
 }
 
 [EventName("TestEvent")]

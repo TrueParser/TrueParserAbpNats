@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using NATS.Client.JetStream.Models;
 
 namespace TrueParser.Abp.EventBus.Nats;
@@ -27,6 +29,23 @@ public class NatsDistributedEventBusOptions
     public string? MaxAge { get; set; }
 
     public string? PrefetchCount { get; set; }
+
+    /// <summary>
+    /// Maximum time a delivered message may remain unacknowledged before
+    /// JetStream attempts redelivery. Null preserves the server default.
+    /// </summary>
+    public TimeSpan? AckWait { get; set; }
+
+    /// <summary>
+    /// Maximum number of delivery attempts for one message. Null preserves the
+    /// server default of unlimited redelivery.
+    /// </summary>
+    public long? MaxDeliver { get; set; }
+
+    /// <summary>
+    /// Optional JetStream redelivery backoff sequence. Null leaves it unset.
+    /// </summary>
+    public ICollection<TimeSpan>? BackOff { get; set; }
 
     /// <summary>
     /// Controls where a newly created durable consumer starts in the stream.

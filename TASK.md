@@ -463,7 +463,7 @@ Verification record:
 
 ### 1.9 Redelivery and Poison-Message Controls Slice
 
-Status: `[ ]` Pending.
+Status: `[x]` Complete.
 
 Problem statement:
 
@@ -474,19 +474,35 @@ a clear bounded-delivery policy.
 
 Scope:
 
-- [ ] Expose the required JetStream consumer options for `AckWait`, `MaxDeliver`, and `BackOff`.
-- [ ] Keep defaults conservative and aligned with native NATS behavior unless an explicit requirement justifies an override.
-- [ ] Preserve ACK on successful processing and NAK/redelivery on handler failure.
-- [ ] Do not add a custom dead-letter queue framework.
-- [ ] Add focused live tests for transient recovery, configured maximum delivery, backoff, and successful acknowledgement stopping redelivery.
+- [x] Expose the required JetStream consumer options for `AckWait`, `MaxDeliver`, and `BackOff`.
+- [x] Keep defaults conservative and aligned with native NATS behavior unless an explicit requirement justifies an override.
+- [x] Preserve ACK on successful processing and NAK/redelivery on handler failure.
+- [x] Do not add a custom dead-letter queue framework.
+- [x] Add focused live tests for transient recovery, configured maximum delivery, backoff, and successful acknowledgement stopping redelivery.
 
 Completion criteria:
 
-- [ ] Transient handler failure is redelivered and can succeed.
-- [ ] Configured `MaxDeliver` is honored.
-- [ ] Configured backoff is applied by the consumer.
-- [ ] Successful processing ACKs the message and stops redelivery.
-- [ ] Poison-message behavior and the absence of a built-in custom DLQ are documented.
+- [x] Transient handler failure is redelivered and can succeed.
+- [x] Configured `MaxDeliver` is honored.
+- [x] Configured backoff is applied by the consumer.
+- [x] Successful processing ACKs the message and stops redelivery.
+- [x] Poison-message behavior and the absence of a built-in custom DLQ are documented.
+
+Verification record:
+
+- Regression-first check: `Configured_MaxDeliver_Should_Stop_Poison_Message_Redelivery` was run before the production wiring and failed because `MaxDeliver = 2` was ignored; the poison handler ran 666 times in the observation window instead of stopping at two deliveries.
+- Added nullable `AckWait`, `MaxDeliver`, and `BackOff` options. Null values leave the corresponding NATS server defaults unchanged.
+- New durable consumer creation copies configured values to `ConsumerConfig`; existing durables are still fetched without configuration mutation.
+- Preserved the existing successful-processing `AckAsync()` and handler-failure `NakAsync()` behavior.
+- Added live coverage for effective consumer configuration, transient failure followed by success, bounded poison-message redelivery, configured backoff, and successful ACK stopping redelivery.
+- NATS behavior verified in coverage: when `BackOff` is configured, its first duration becomes the effective `AckWait`; handler exceptions continue to use immediate NAK/redelivery, while `MaxDeliver` bounds attempts.
+- Updated `README.md` and `docs/wiki.md` with redelivery options, native defaults, backoff behavior, poison-message handling, and the absence of a custom DLQ.
+- Roslyn Debug build for the test project: succeeded with 0 warnings and 0 errors.
+- Focused redelivery tests with `RUN_NATS_TESTS=true`: 5 passed, 0 failed.
+- Full live test project with `RUN_NATS_TESTS=true`: 33 passed, 0 failed.
+- Normal test project without the NATS gate: 2 passed, 31 skipped, 0 failed.
+- `dotnet build TrueParser.Abp.Nats.slnx --no-restore`: succeeded with 0 warnings and 0 errors.
+- No custom DLQ, Inbox/Outbox redesign, stream-management, retention, consumer-identity, event-name, or later hardening semantics were changed.
 
 ### 1.10 Existing Stream Configuration Validation Slice
 

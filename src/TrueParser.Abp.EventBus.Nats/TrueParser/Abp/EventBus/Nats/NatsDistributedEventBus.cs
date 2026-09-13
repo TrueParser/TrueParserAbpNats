@@ -253,6 +253,21 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                             DeliverPolicy = NatsOptions.InitialDeliveryPolicy
                         };
 
+                        if (NatsOptions.AckWait.HasValue)
+                        {
+                            consumerConfig.AckWait = NatsOptions.AckWait.Value;
+                        }
+
+                        if (NatsOptions.MaxDeliver.HasValue)
+                        {
+                            consumerConfig.MaxDeliver = NatsOptions.MaxDeliver.Value;
+                        }
+
+                        if (NatsOptions.BackOff is { Count: > 0 })
+                        {
+                            consumerConfig.Backoff = NatsOptions.BackOff.ToList();
+                        }
+
                         var prefetchCount = ParsePrefetchCount(NatsOptions.PrefetchCount);
                         if (prefetchCount.HasValue)
                         {
