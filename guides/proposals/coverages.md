@@ -72,6 +72,52 @@ Every asynchronous test must have a hard timeout.
 
 Execute the numbered items one at a time.
 
+## Current implementation status
+
+Status recorded on 2026-09-13. This proposal is **not complete**. The
+following five tests have been implemented and passed against the local
+JetStream-enabled NATS server and the disposable MySQL test database:
+
+| Proposal test | Status | Implemented test |
+|---|---|---|
+| 1.1 committed Outbox flow | `[x]` Verified | `Publishing_Inside_Committed_UoW_Should_Flow_Through_ABP_Outbox_To_JetStream` |
+| 1.2 rolled-back UoW | `[x]` Verified | `Rolled_Back_UoW_Should_Not_Publish_Outbox_Event` |
+| 1.3 Outbox publish failure and recovery | `[x]` Verified | `Outbox_Worker_Should_Delete_Record_Only_After_Successful_NATS_Publish` |
+| 2.1 Inbox background processing | `[x]` Verified | `Incoming_NATS_Event_Should_Be_Processed_By_ABP_Inbox_Background_Processor` |
+| 2.2 failed Inbox handler | `[x]` Verified | `Failing_Inbox_Handler_Should_Not_Be_Marked_Processed` |
+| 2.3 Inbox duplicate protection | `[x]` Verified | `Successful_Inbox_Handler_Should_Be_Executed_Exactly_Once` |
+
+The following remain pending and must not be inferred as covered by the five
+tests above:
+
+```text
+3    username/password and JWT/Seed authentication
+4    named connection resolution and connection reuse
+5    broker disconnect, restart, and reconnect recovery
+6    complete shutdown lifecycle
+7    PublishManyFromOutboxAsync success and partial failure
+8    health-check behavior
+9    complete DistributedEventReceived notification matrix
+10   independent multi-process fan-out and replica verification
+11   line/branch coverage measurement and uncovered-branch review
+```
+
+The test fixture uses one disposable MySQL database, as authorized for local
+verification, rather than the SQLite fixture suggested by the original test
+infrastructure section. It still uses ABP's real EF-backed Inbox and Outbox
+infrastructure; it does not use EF InMemory or manually invoke the transport
+methods for the six end-to-end tests.
+
+Verification snapshot:
+
+```text
+Live suite:        50 passed, 0 failed, 0 skipped
+Broker-free suite: 2 passed, 0 failed, 48 skipped
+```
+
+The live tests remain gated by `NatsFact` and `RUN_NATS_TESTS=true`; the
+tagging and package-publication workflow is not part of this proposal update.
+
 ---
 
 # 1. True ABP Outbox End-to-End Integration

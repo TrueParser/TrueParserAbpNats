@@ -10,6 +10,7 @@ using Volo.Abp.EntityFrameworkCore;
 using Volo.Abp.EntityFrameworkCore.DistributedEvents;
 using Volo.Abp.Testing;
 using Volo.Abp.Uow;
+using TrueParser.Abp.Nats;
 using Xunit;
 
 namespace TrueParser.Abp.EventBus.Nats;
@@ -114,6 +115,70 @@ public class AbpEventBoxEndToEndTests : AbpIntegratedTest<TrueParserAbpEventBoxT
         handlerInvocations.ShouldBe(0);
         (await QueryDatabaseAsync(db => db.OutgoingEvents
             .AnyAsync(record => record.EventName == "TestEvent"))).ShouldBeFalse();
+    }
+
+    [NatsFact]
+    public async Task Outbox_Worker_Should_Delete_Record_Only_After_Successful_NATS_Publish()
+    {
+        await ResetEventBoxesAsync();
+        var eventName = $"Coverage.Outbox.Recovery.{Guid.NewGuid():N}";
+        var handlerInvocations = 0;
+        var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var natsOptions = GetRequiredService<IOptions<AbpNatsOptions>>().Value;
+        var connectionPool = GetRequiredService<INatsConnectionPool>();
+        var originalUrl = natsOptions.Connections;
+
+        using var subscription = _eventBus.Subscribe<TestEventData>(data =>
+        {
+            if (data.Message == eventName)
+            {
+                Interlocked.Increment(ref handlerInvocations);
+                received.TrySetResult();
+            }
+
+            return Task.CompletedTask;
+        });
+
+        try
+        {
+            await _eventBus.InitializeAsync();
+
+            natsOptions.Connections = "nats://127.0.0.1:1";
+            await ((NatsConnectionPool)connectionPool).DisposeAsync();
+
+            using (var uow = GetRequiredService<IUnitOfWorkManager>().Begin(
+                       requiresNew: true,
+                       isTransactional: true))
+            {
+                await _eventBus.PublishAsync(
+                    new TestEventData { Message = eventName },
+                    onUnitOfWorkComplete: true,
+                    useOutbox: true);
+
+                await uow.CompleteAsync();
+            }
+
+            await WaitUntilAsync(async () => await QueryDatabaseAsync(db => db.OutgoingEvents
+                .AnyAsync(record => record.EventName == "TestEvent")));
+            await Task.Delay(500);
+
+            handlerInvocations.ShouldBe(0);
+            (await QueryDatabaseAsync(db => db.OutgoingEvents
+                .AnyAsync(record => record.EventName == "TestEvent"))).ShouldBeTrue();
+
+            natsOptions.Connections = originalUrl;
+            await ((NatsConnectionPool)connectionPool).DisposeAsync();
+
+            await received.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            handlerInvocations.ShouldBe(1);
+            await WaitUntilAsync(async () => !await QueryDatabaseAsync(db => db.OutgoingEvents
+                .AnyAsync(record => record.EventName == "TestEvent")));
+        }
+        finally
+        {
+            natsOptions.Connections = originalUrl;
+            await ((NatsConnectionPool)connectionPool).DisposeAsync();
+        }
     }
 
     [NatsFact]
