@@ -5,5 +5,6 @@
   </Folder>
   <Folder Name="/test/">
     <Project Path="test/TrueParser.Abp.EventBus.Nats.Tests/TrueParser.Abp.EventBus.Nats.Tests.csproj" />
+    <Project Path="test/TrueParser.Abp.EventBus.Nats.ReplicaHost/TrueParser.Abp.EventBus.Nats.ReplicaHost.csproj" />
   </Folder>
 </Solution>

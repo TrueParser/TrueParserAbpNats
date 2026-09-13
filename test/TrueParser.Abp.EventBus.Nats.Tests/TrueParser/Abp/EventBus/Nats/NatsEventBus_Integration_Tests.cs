@@ -607,6 +607,119 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
     }
 
     [NatsFact]
+    public async Task Typed_Direct_Event_Should_Emit_One_DistributedEventReceived_From_Direct()
+    {
+        var handlerInvocations = 0;
+        var notification = new TaskCompletionSource<DistributedEventReceived>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var localEventBus = GetRequiredService<ILocalEventBus>();
+
+        using var notificationSubscription = localEventBus.Subscribe<DistributedEventReceived>(eventData =>
+        {
+            if (eventData.EventName == "TestEvent")
+            {
+                notification.TrySetResult(eventData);
+            }
+
+            return Task.CompletedTask;
+        });
+        using var handlerSubscription = _distributedEventBus.Subscribe<TestEventData>(_ =>
+        {
+            Interlocked.Increment(ref handlerInvocations);
+            return Task.CompletedTask;
+        });
+
+        for (var attempt = 0; attempt < 20 && !notification.Task.IsCompleted; attempt++)
+        {
+            await _distributedEventBus.PublishAsync(
+                new TestEventData { Message = $"TypedDirect.{Guid.NewGuid():N}" },
+                onUnitOfWorkComplete: false,
+                useOutbox: false);
+            await Task.Delay(100);
+        }
+
+        var received = await notification.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        received.Source.ShouldBe(DistributedEventSource.Direct);
+        received.EventName.ShouldBe("TestEvent");
+        received.EventData.ShouldBeOfType<TestEventData>();
+        Volatile.Read(ref handlerInvocations).ShouldBe(1);
+    }
+
+    [NatsFact]
+    public async Task Typed_Inbox_Event_Should_Emit_One_DistributedEventReceived_From_Inbox()
+    {
+        var handlerInvocations = 0;
+        var notification = new TaskCompletionSource<DistributedEventReceived>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var serializer = GetRequiredService<INatsEventSerializer>();
+        var localEventBus = GetRequiredService<ILocalEventBus>();
+
+        using var notificationSubscription = localEventBus.Subscribe<DistributedEventReceived>(eventData =>
+        {
+            if (eventData.EventName == "TestEvent")
+            {
+                notification.TrySetResult(eventData);
+            }
+
+            return Task.CompletedTask;
+        });
+        using var eventBus = CreateCapturingEventBus();
+        using var handlerSubscription = eventBus.Subscribe(
+            new TestEventHandler(_ => Interlocked.Increment(ref handlerInvocations)));
+
+        await eventBus.ProcessFromInboxForTestAsync(
+            CreateIncomingEvent(
+                "TestEvent",
+                serializer.Serialize(new TestEventData { Message = "typed-inbox-notification" })),
+            new InboxConfig($"TypedNotification_{Guid.NewGuid():N}"));
+
+        var received = await notification.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        received.Source.ShouldBe(DistributedEventSource.Inbox);
+        received.EventName.ShouldBe("TestEvent");
+        received.EventData.ShouldBeOfType<TestEventData>().Message.ShouldBe("typed-inbox-notification");
+        Volatile.Read(ref handlerInvocations).ShouldBe(1);
+    }
+
+    [NatsFact]
+    public async Task Dynamic_Inbox_Event_Should_Emit_Actual_Event_Name_And_Raw_Event_Data()
+    {
+        var eventName = $"Identity.User.Created.{Guid.NewGuid():N}";
+        var handlerInvocations = 0;
+        var notification = new TaskCompletionSource<DistributedEventReceived>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var serializer = GetRequiredService<INatsEventSerializer>();
+        var localEventBus = GetRequiredService<ILocalEventBus>();
+
+        using var notificationSubscription = localEventBus.Subscribe<DistributedEventReceived>(eventData =>
+        {
+            if (eventData.EventName == eventName)
+            {
+                notification.TrySetResult(eventData);
+            }
+
+            return Task.CompletedTask;
+        });
+        using var eventBus = CreateCapturingEventBus();
+        using var handlerSubscription = eventBus.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ => Interlocked.Increment(ref handlerInvocations)));
+
+        await eventBus.ProcessFromInboxForTestAsync(
+            CreateIncomingEvent(eventName, serializer.Serialize(new { Value = 7 })),
+            new InboxConfig($"DynamicNotification_{Guid.NewGuid():N}"));
+
+        var received = await notification.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        received.Source.ShouldBe(DistributedEventSource.Inbox);
+        received.EventName.ShouldBe(eventName);
+        received.EventData.ShouldNotBeOfType<DynamicEventData>();
+        var rawData = received.EventData.ShouldBeOfType<JsonElement>();
+        (rawData.TryGetProperty("Value", out var value) || rawData.TryGetProperty("value", out value))
+            .ShouldBeTrue();
+        value.GetInt32().ShouldBe(7);
+        Volatile.Read(ref handlerInvocations).ShouldBe(1);
+    }
+
+    [NatsFact]
     public async Task Outbox_Publish_Should_Trigger_DistributedEventSent_Exactly_Once_From_Outbox()
     {
         var eventName = $"NotificationParity.Outbox.{Guid.NewGuid():N}";

@@ -75,7 +75,7 @@ Execute the numbered items one at a time.
 ## Current implementation status
 
 Status recorded on 2026-09-13. This proposal is **not complete**. The
-following twenty-four tests have been implemented and passed against the local
+following thirty tests have been implemented and passed against the local
 JetStream-enabled NATS servers and the disposable MySQL test database:
 
 | Proposal test | Status | Implemented test |
@@ -104,15 +104,18 @@ JetStream-enabled NATS servers and the disposable MySQL test database:
 | 7.3 PublishMany stops on partial failure | `[x]` Verified | `PublishManyFromOutbox_Should_Stop_On_Partial_Failure` |
 | 7.4 retry after partial failure avoids duplicate delivery | `[x]` Verified | `Retry_After_Partial_Batch_Failure_Should_Not_Create_Duplicate_Business_Delivery` |
 | 8.1 healthy NATS and JetStream health check | `[x]` Verified | `HealthCheck_Should_Be_Healthy_When_NATS_And_JetStream_Are_Available` |
+| 8.2 unreachable NATS health check | `[x]` Verified | `HealthCheck_Should_Be_Unhealthy_When_Server_Is_Unreachable` |
+| 8.3 NATS without JetStream health check | `[x]` Verified | `HealthCheck_Should_Be_Unhealthy_When_NATS_Is_Running_Without_JetStream` |
+| 9.1 typed direct DistributedEventReceived notification | `[x]` Verified | `Typed_Direct_Event_Should_Emit_One_DistributedEventReceived_From_Direct` |
+| 9.2 typed Inbox DistributedEventReceived notification | `[x]` Verified | `Typed_Inbox_Event_Should_Emit_One_DistributedEventReceived_From_Inbox` |
+| 9.3 dynamic Inbox notification identity and payload | `[x]` Verified | `Dynamic_Inbox_Event_Should_Emit_Actual_Event_Name_And_Raw_Event_Data` |
+| 10.1 same-client multi-process replica sharing | `[x]` Verified | `Two_Processes_With_Same_ClientName_Should_Act_As_One_Logical_Service` |
 
-The following remain pending and must not be inferred as covered by the twenty-four
+The following remain pending and must not be inferred as covered by the thirty
 tests above:
 
 ```text
-8.2 health check when server is unreachable
-8.3 health check when NATS runs without JetStream
-9    complete DistributedEventReceived notification matrix
-10   independent multi-process fan-out and replica verification
+10.2 independent multi-process fan-out for different ClientNames
 11   line/branch coverage measurement and uncovered-branch review
 ```
 
@@ -125,8 +128,8 @@ methods for the six end-to-end tests.
 Verification snapshot:
 
 ```text
-Live suite:        68 passed, 0 failed, 0 skipped
-Broker-free suite: 2 passed, 0 failed, 66 skipped
+Live suite:        74 passed, 0 failed, 0 skipped
+Broker-free suite: 2 passed, 0 failed, 72 skipped
 ```
 
 The live tests remain gated by `NatsFact` and `RUN_NATS_TESTS=true`; the

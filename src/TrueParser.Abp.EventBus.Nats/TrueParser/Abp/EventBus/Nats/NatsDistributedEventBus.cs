@@ -625,6 +625,13 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
                 using (CorrelationIdProvider.Change(correlationId))
                 {
+                    await TriggerDistributedEventReceivedAsync(new DistributedEventReceived
+                    {
+                        Source = DistributedEventSource.Direct,
+                        EventName = eventName,
+                        EventData = eventData
+                    });
+
                     await TriggerHandlersDirectAsync(eventType, eventData);
                 }
             }
