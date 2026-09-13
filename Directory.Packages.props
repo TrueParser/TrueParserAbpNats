@@ -4,12 +4,12 @@
   </PropertyGroup>
   <ItemGroup>
     <!-- ABP Framework -->
-    <PackageVersion Include="Volo.Abp.EventBus" Version="10.3.0" />
-    <PackageVersion Include="Volo.Abp.Json" Version="10.3.0" />
-    <PackageVersion Include="Volo.Abp.Threading" Version="10.3.0" />
-    <PackageVersion Include="Volo.Abp.Core" Version="10.3.0" />
-    <PackageVersion Include="Volo.Abp.TestBase" Version="10.3.0" />
-    <PackageVersion Include="Volo.Abp.Autofac" Version="10.3.0" />
+    <PackageVersion Include="Volo.Abp.EventBus" Version="10.6.0" />
+    <PackageVersion Include="Volo.Abp.Json" Version="10.6.0" />
+    <PackageVersion Include="Volo.Abp.Threading" Version="10.6.0" />
+    <PackageVersion Include="Volo.Abp.Core" Version="10.6.0" />
+    <PackageVersion Include="Volo.Abp.TestBase" Version="10.6.0" />
+    <PackageVersion Include="Volo.Abp.Autofac" Version="10.6.0" />
 
     <!-- NATS -->
     <PackageVersion Include="NATS.Net" Version="2.5.3" />

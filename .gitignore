@@ -76,3 +76,6 @@ npm-debug.log*
 ReferenceImplementation/
 **/ReferenceImplementation/
 D:/Development/Abp.Nats/TrueParser.Abp.Nats/ReferenceImplementation/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+graft/
