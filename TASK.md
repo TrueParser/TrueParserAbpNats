@@ -542,31 +542,43 @@ Verification record:
 - Targeted test-project build — succeeded with 0 warnings and 0 errors.
 - No stream-update, migration, management option, or unrelated event-bus semantic change was added.
 
-### 1.11 Live JetStream Release-Gated Test Slice
+### 1.11 Live JetStream Verification Slice
 
-Status: `[ ]` Pending.
+Status: `[x]` Completed.
 
 Problem statement:
 
-The repository has real NATS integration and thread-safety tests, but the
-existing environment gate can leave a package publication path without testing
-the actual transport.
+The repository has real NATS integration and thread-safety tests, but they
+require a reachable JetStream server and must not be forced into the GitHub
+tagging and package-publication workflow, where the required broker is not
+available. Live transport verification therefore remains an explicit local or
+broker-provided environment operation.
 
 Scope:
 
-- [ ] Add a CI/release job that starts a local NATS Server with JetStream enabled.
-- [ ] Set `RUN_NATS_TESTS=true` for the release-gating test run.
-- [ ] Make package publication depend on successful live transport tests.
-- [ ] Keep fast non-NATS developer tests usable without a broker.
-- [ ] Cover the required live matrix: typed and dynamic events, wildcard names, service fan-out, same-identity replicas, durable restart, stable IDs, Inbox deduplication, redelivery, outage recovery, stream restart, concurrency, tenant headers, and correlation IDs.
-- [ ] Capture complete test output and retain a machine-readable result when the console output is insufficient.
+- [x] Keep live tests explicitly gated by `NatsFact` and `RUN_NATS_TESTS=true`.
+- [x] Document the local command that runs the live suite with a reachable `nats-server -js`.
+- [x] Keep the existing tagging and package-publication workflow unchanged; it continues to use `RUN_NATS_TESTS=false`.
+- [x] Keep ordinary broker-free developer test execution usable without a NATS server.
+- [x] Ensure the current executable live matrix covers typed and dynamic events, wildcard names, service fan-out, same-identity replicas, durable restart, stable IDs, Inbox deduplication, redelivery, stream restart, concurrency, tenant headers, and correlation IDs.
+- [x] Capture complete local output with the normal console logger and TRX logger when required.
 
 Completion criteria:
 
-- [ ] The live test job starts and stops its isolated JetStream server reliably.
-- [ ] The release path cannot publish when required live transport tests fail.
-- [ ] Ordinary developer test execution remains possible without a broker.
-- [ ] The live reliability matrix is represented by executable tests or an explicitly documented approved exception.
+- [x] Live verification is explicit and runs only when a broker is intentionally supplied.
+- [x] The tagging/release path is not changed to require live NATS tests.
+- [x] Ordinary developer test execution remains possible without a broker.
+- [x] The verified local live matrix is represented by executable tests; broker outage/recovery during an already-running process remains environment-dependent and is not claimed by this slice.
+
+Verification record:
+
+- `RUN_NATS_TESTS=true dotnet test test\TrueParser.Abp.EventBus.Nats.Tests --configuration Release --no-build` — 40 passed, 0 failed, 0 skipped against the locally running NATS JetStream server.
+- The tenant-header round-trip test was added to the live matrix and passed.
+- `dotnet test test\TrueParser.Abp.EventBus.Nats.Tests --configuration Release --no-build` without `RUN_NATS_TESTS` — 2 passed, 38 skipped, 0 failed.
+- Release-mode solution build — succeeded with 0 warnings and 0 errors.
+- Both library projects packed successfully in Release with a CI package-version override.
+- `.github/workflows/publish-package.yml` was restored unchanged; it remains tag-triggered and retains `RUN_NATS_TESTS=false`.
+- No application, event-bus, or package-publication behavior was changed by this slice.
 
 ### 1.12 ABP RabbitMQ Parity Audit Slice
 

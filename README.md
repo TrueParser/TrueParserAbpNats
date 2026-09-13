@@ -162,8 +162,8 @@ public class MyModule : AbpModule { }
 # Start NATS with JetStream
 nats-server -js
 
-# Run integration tests
-dotnet test test/TrueParser.Abp.EventBus.Nats.Tests
+# Run live integration tests explicitly
+RUN_NATS_TESTS=true dotnet test test/TrueParser.Abp.EventBus.Nats.Tests
 ```
 
 ---

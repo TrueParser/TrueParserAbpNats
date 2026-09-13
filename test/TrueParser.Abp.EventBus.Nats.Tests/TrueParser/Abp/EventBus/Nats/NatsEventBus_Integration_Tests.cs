@@ -690,6 +690,34 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
     }
 
     [NatsFact]
+    public async Task Tenant_Id_Should_Round_Trip_Through_Live_Nats_Transport()
+    {
+        var eventName = $"TransportMatrix.Tenant.{Guid.NewGuid():N}";
+        var tenantId = Guid.NewGuid();
+        var observedTenantId = new TaskCompletionSource<Guid?>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var subscription = _distributedEventBus.Subscribe(eventName, new RetainedEventHandler(_ =>
+        {
+            observedTenantId.TrySetResult(GetRequiredService<ICurrentTenant>().Id);
+        }));
+
+        using (GetRequiredService<ICurrentTenant>().Change(tenantId))
+        {
+            for (var attempt = 0; attempt < 20 && !observedTenantId.Task.IsCompleted; attempt++)
+            {
+                await _distributedEventBus.PublishAsync(
+                    typeof(DynamicEventData),
+                    new DynamicEventData(eventName, new { Value = 1 }),
+                    onUnitOfWorkComplete: false,
+                    useOutbox: false);
+                await Task.Delay(100);
+            }
+        }
+
+        (await observedTenantId.Task.WaitAsync(TimeSpan.FromSeconds(10))).ShouldBe(tenantId);
+    }
+
+    [NatsFact]
     public async Task Abp_Inbox_Should_Deduplicate_Repeated_Message_Id()
     {
         var inboxOptions = new AbpDistributedEventBusOptions();
