@@ -44,7 +44,7 @@ PublishAsync(OrderPlacedEto)
         └─► PublishToEventBusAsync
               └─► js.PublishAsync("MyApp.Events.OrderPlacedEto", bytes)
                     └─► JetStream Stream "MyAppEvents"
-                          └─► Durable pull consumer per handler
+                          └─► Durable pull consumer per service/event identity
                                 └─► HandleEventAsync(OrderPlacedEto)
 ```
 
@@ -64,17 +64,25 @@ MyApp.Events.>
 
 ### Consumer naming
 
-Consumer names are derived as `{StreamName}_{ClientName}_{EventName}` with all
-non-alphanumeric characters replaced by `_`:
+Consumer names are derived from `{StreamName}`, `{ClientName}`, and
+`{EventName}`. The readable, sanitized identity is suffixed with the first 10
+lowercase hexadecimal characters of a deterministic SHA-256 hash of the raw
+three-part identity:
 
 ```
-MyAppEvents_my-service_Ordering_OrderPlacedEto
+MyAppEvents_my-service_Ordering_OrderPlacedEto_4454cfbb7d
 ```
 
-Names are sanitized to satisfy NATS consumer name constraints (alphanumeric, `-`, `_` only).
-`ClientName` is the required logical event-bus service identity: replicas with
-the same value share durable consumers, while different values receive
-independent fan-out copies.
+Names are sanitized to satisfy NATS consumer name constraints (alphanumeric,
+`-`, `_` only). The hash prevents distinct raw identities such as
+`Order.Created` and `Order_Created` from colliding. The same raw identity is
+deterministic across restarts.
+
+`ClientName` is required and is the logical event-bus service identity: replicas
+with the same value share durable consumers, while different values receive
+independent fan-out copies. Existing consumers are not modified automatically;
+their `FilterSubject` must match the event subject and their ACK policy must be
+`Explicit`, otherwise initialization fails.
 
 ---
 
@@ -103,7 +111,7 @@ independent fan-out copies.
 | Property | Default | Description |
 |---|---|---|
 | `Connections` | `nats://localhost:4222` | Primary server URL. Comma-separate for clustering. |
-| `ClientName` | _(empty)_ | Shown in NATS server monitoring UI |
+| `ClientName` | _(empty)_ | NATS connection/monitoring name; independent from the event-bus subscriber identity |
 | `UserName` / `Password` | _(empty)_ | Basic authentication |
 | `Jwt` / `Seed` | _(empty)_ | NKey / JWT authentication |
 | `NamedConnections` | _(empty)_ | Additional named connections for multi-cluster setups |
@@ -123,6 +131,7 @@ independent fan-out copies.
         "AckWait": null,
         "MaxDeliver": null,
         "BackOff": null,
+        "PrefetchCount": null,
         "Retention": "Interest",
         "ReplicaCount": 1,
         "MaxAge": null
@@ -142,9 +151,16 @@ independent fan-out copies.
 | `AckWait` | `null` | Maximum unacknowledged duration before redelivery; null preserves the NATS default |
 | `MaxDeliver` | `null` | Maximum delivery attempts; null preserves the native unlimited-redelivery default |
 | `BackOff` | `null` | Optional acknowledgment-timeout redelivery delays, in order |
+| `PrefetchCount` | `null` | Positive `MaxAckPending` value for newly created consumers; null preserves the NATS default |
 | `Retention` | `Interest` | `Interest` (default) or `Limits`; `Workqueue` is rejected — see below |
 | `ReplicaCount` | `1` | Number of stream replicas (use 3 for HA clusters) |
 | `MaxAge` | `null` | Max message retention (e.g. `"24h"`) |
+
+`TrueParser:Nats:ClientName` belongs to the connection layer. The required
+`TrueParser:EventBus:Nats:ClientName` belongs to the distributed-event-bus
+layer and determines durable consumer identity. They are intentionally
+independent settings. The event-bus identity has no fallback to the connection
+name; initialization fails when it is missing or blank.
 
 #### Retention policies
 
@@ -320,12 +336,18 @@ public class MyModule : AbpModule { }
   "TrueParser": {
     "Nats": {
       "Connections": "nats://localhost:4222",
-      "ClientName": "my-service"
+      "ClientName": "my-service-connection"
     },
     "EventBus": {
       "Nats": {
         "StreamName": "MyAppEvents",
-        "SubjectPrefix": "MyApp.Events"
+        "SubjectPrefix": "MyApp.Events",
+        "ClientName": "my-service",
+        "InitialDeliveryPolicy": "New",
+        "AckWait": null,
+        "MaxDeliver": null,
+        "BackOff": null,
+        "PrefetchCount": null
       }
     }
   }
@@ -344,15 +366,16 @@ public class MyModule : AbpModule { }
 | Wildcard subjects | Via topic exchanges | Native (`*`, `>`) |
 | Outbox/Inbox | Yes | Yes |
 | UoW integration | Yes | Yes |
-| Latency | ~1ms | ~100µs |
-| Throughput | ~50K msg/s | ~10M msg/s |
+| Latency | Workload-dependent | Workload-dependent |
+| Throughput | Workload-dependent | Workload-dependent |
 | Ops complexity | High | Low |
 
 ---
 
 ## Outbox / Inbox Pattern
 
-Works identically to the RabbitMQ implementation. Configure via ABP's standard outbox options:
+The NATS event bus uses ABP's standard outbox and inbox APIs and transaction
+integration. Configure them through the same ABP options used by RabbitMQ:
 
 ```csharp
 Configure<AbpDistributedEventBusOptions>(options =>
@@ -371,10 +394,12 @@ Configure<AbpDistributedEventBusOptions>(options =>
 
 When an outbox is configured:
 - `PublishAsync` writes the event to the outbox table inside the same DB transaction
-- The outbox worker calls `PublishFromOutboxAsync` which sends to NATS and marks the record processed
-- On the subscriber side, `ProcessFromInboxAsync` de-duplicates using the message ID before invoking handlers
+- The outbox worker calls `PublishFromOutboxAsync`, which sends to NATS with the ABP outbox ID in the `Nats-Msg-Id` header and marks the record processed
+- On the subscriber side, `ProcessFromInboxAsync` passes that message ID to ABP Inbox processing, which de-duplicates before invoking handlers
+- Typed outbox events retain their event-name/type registration; dynamic events continue to use their string event name
 
-No NATS-specific configuration is needed for outbox/inbox — it is entirely driven by ABP's standard options.
+Delivery remains at-least-once. JetStream does not replace the ABP Outbox or
+Inbox, and the transport does not provide exactly-once processing.
 
 ---
 
@@ -395,14 +420,17 @@ The check verifies:
 
 ## Multi-Tenancy
 
-Tenant context is propagated automatically via NATS message headers:
+Direct NATS delivery includes tenant metadata in the message headers:
 
 | Header | Value |
 |---|---|
 | `Abp-Tenant-Id` | `CurrentTenant.Id` (when set) |
 | `Abp-Correlation-Id` | Current correlation ID |
 
-No configuration needed — this is transparent.
+For ABP Inbox delivery, use event transfer objects implementing `IMultiTenant`.
+ABP restores `CurrentTenant` from the deserialized event's `TenantId` during
+handler invocation. The NATS tenant header is transport metadata and is not
+persisted as a separate Inbox field; host events use a null `TenantId`.
 
 ---
 
@@ -448,7 +476,12 @@ The stream already exists from a previous run. This is handled automatically —
 
 ### Consumer name rejected by NATS server
 
-Consumer names must be alphanumeric plus `-` and `_`. Event names containing `.` or wildcard characters (`*`, `>`) are automatically sanitized. If you use unusual event names, check the sanitized consumer name in the NATS monitoring dashboard (`http://localhost:8222`).
+Consumer names must be alphanumeric plus `-` and `_`. Event names containing `.`
+or wildcard characters (`*`, `>`) are sanitized, and a deterministic hash of
+the raw stream, client, and event identity is appended to prevent collisions.
+If an existing consumer has the wrong filter subject or ACK policy, startup
+fails instead of silently reusing it. Check the consumer identity and
+configuration in the NATS monitoring dashboard (`http://localhost:8222`).
 
 ---
 

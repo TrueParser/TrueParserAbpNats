@@ -6,7 +6,7 @@
 [![License: LGPL v3](https://img.shields.io/badge/License-LGPL%20v3-blue.svg?style=flat-square)](./LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10-purple?style=flat-square)](https://dotnet.microsoft.com)
 
-**NATS JetStream** distributed event bus for the **ABP Framework** — a drop-in replacement for `Volo.Abp.EventBus.RabbitMQ` with minimal migration effort.
+**NATS JetStream** distributed event bus for the **ABP Framework** — an ABP-compatible alternative to `Volo.Abp.EventBus.RabbitMQ` with minimal application-code migration.
 
 > This project is an independent community library and is not affiliated with, endorsed by, or officially connected to ABP or Volosoft.
 
@@ -16,8 +16,8 @@
 
 | | RabbitMQ | NATS JetStream |
 |---|---|---|
-| Latency | ~1ms | ~100µs |
-| Throughput | ~50K msg/s | ~10M msg/s |
+| Latency | Workload-dependent | Workload-dependent |
+| Throughput | Workload-dependent | Workload-dependent |
 | Operations overhead | High (exchanges, queues, bindings) | Low (subjects, streams) |
 | At-least-once delivery | Yes | Yes |
 | Fan-out / wildcard | Via exchanges | Native subject wildcards |
@@ -58,7 +58,7 @@ public class MyModule : AbpModule { }
   "TrueParser": {
     "Nats": {
       "Connections": "nats://localhost:4222",
-      "ClientName": "my-service"
+      "ClientName": "my-service-connection"
     },
     "EventBus": {
       "Nats": {
@@ -75,6 +75,12 @@ public class MyModule : AbpModule { }
 }
 ```
 
+`TrueParser:Nats:ClientName` names the NATS connection for monitoring. The
+required `TrueParser:EventBus:Nats:ClientName` is the logical subscriber
+identity used for durable consumers. Keep these values independent when a
+service has more than one event-bus role. The event-bus identity has no fallback
+to the connection name; startup fails when it is missing or blank.
+
 ### 4. Use — identical to any ABP event bus
 
 ```csharp
@@ -90,6 +96,26 @@ public class OrderPlacedHandler : IDistributedEventHandler<OrderPlacedEto>
     }
 }
 ```
+
+### Delivery and reliability
+
+- New durable consumers use `InitialDeliveryPolicy.New` by default; use `All`
+  only when a new service intentionally needs retained history.
+- `Interest` retention is the default and preserves fan-out. `Workqueue` is
+  rejected because it would break independent subscribers; `Limits` is
+  available when bounded stream retention is intentional.
+- Handler failures are negatively acknowledged for redelivery. `AckWait` and
+  `BackOff` govern acknowledgement-timeout redelivery, while `MaxDeliver`
+  bounds attempts when configured.
+- Outgoing ABP Outbox IDs are published as `Nats-Msg-Id` and are passed to the
+  ABP Inbox for deduplication. Delivery remains at-least-once; JetStream does
+  not replace the ABP Outbox or Inbox.
+- Durable names include a deterministic hash of the raw stream, subscriber,
+  and event identity, preventing punctuation-based name collisions. Existing
+  consumers must retain the expected filter subject and explicit ACK policy.
+- For tenant-aware Inbox processing, use ETOs implementing `IMultiTenant` so
+  ABP restores `TenantId` from the deserialized event. The NATS tenant header
+  is transport metadata and is not persisted as a separate Inbox field.
 
 ---
 
@@ -129,7 +155,7 @@ public class MyModule : AbpModule { }
   "TrueParser": {
     "Nats": {
       "Connections": "nats://localhost:4222",
-      "ClientName": "my-service"
+      "ClientName": "my-service-connection"
     },
     "EventBus": {
       "Nats": {
@@ -151,7 +177,8 @@ public class MyModule : AbpModule { }
 ## Requirements
 
 - NATS Server **2.10+** with JetStream enabled (`nats-server -js`)
-- ABP Framework **10.x**
+- ABP Framework **10.6.0**
+- NATS.Net **3.2.0**
 - .NET **10**
 
 ---
@@ -165,6 +192,9 @@ nats-server -js
 # Run live integration tests explicitly
 RUN_NATS_TESTS=true dotnet test test/TrueParser.Abp.EventBus.Nats.Tests
 ```
+
+Without a local broker, the ordinary test run remains available; live tests
+are gated by `RUN_NATS_TESTS` and are skipped unless it is set to `true`.
 
 ---
 
