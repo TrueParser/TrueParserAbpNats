@@ -216,6 +216,206 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
 
         await secondReceived.Task.WaitAsync(TimeSpan.FromSeconds(10));
     }
+
+    [NatsFact]
+    public async Task Different_ClientNames_Should_Create_Independent_Consumers_And_Receive_The_Event()
+    {
+        var streamName = $"Identity_{Guid.NewGuid():N}";
+        var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Identity.Events";
+        var eventName = "Order.Created";
+        var clientNameA = "Billing-Service";
+        var clientNameB = "Notification-Service";
+
+        using var eventBusA = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = streamName,
+                SubjectPrefix = subjectPrefix,
+                ClientName = clientNameA
+            }));
+        using var eventBusB = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = streamName,
+                SubjectPrefix = subjectPrefix,
+                ClientName = clientNameB
+            }));
+
+        var receivedByA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var receivedByB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var subscriptionA = eventBusA.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ => receivedByA.TrySetResult()));
+        using var subscriptionB = eventBusB.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ => receivedByB.TrySetResult()));
+
+        await eventBusA.InitializeAsync();
+        await eventBusB.InitializeAsync();
+
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+        var consumerNameA = System.Text.RegularExpressions.Regex.Replace(
+            $"{streamName}_{clientNameA}_{eventName}",
+            @"[^a-zA-Z0-9\-_]",
+            "_");
+        var consumerNameB = System.Text.RegularExpressions.Regex.Replace(
+            $"{streamName}_{clientNameB}_{eventName}",
+            @"[^a-zA-Z0-9\-_]",
+            "_");
+
+        var consumersReady = false;
+        for (var iteration = 0; iteration < 50 && !consumersReady; iteration++)
+        {
+            try
+            {
+                await js.GetConsumerAsync(streamName, consumerNameA);
+                await js.GetConsumerAsync(streamName, consumerNameB);
+                consumersReady = true;
+            }
+            catch (NatsJSApiException)
+            {
+                await Task.Delay(100);
+            }
+        }
+
+        consumersReady.ShouldBeTrue("each ClientName must create its own durable consumer");
+
+        await eventBusA.PublishAsync(
+            typeof(DynamicEventData),
+            new DynamicEventData(eventName, new { Value = 1 }),
+            onUnitOfWorkComplete: false,
+            useOutbox: false);
+
+        await Task.WhenAll(
+            receivedByA.Task.WaitAsync(TimeSpan.FromSeconds(10)),
+            receivedByB.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+    }
+
+    [NatsFact]
+    public async Task Same_ClientName_Should_Share_One_Durable_And_Deliver_Once()
+    {
+        var streamName = $"Identity_{Guid.NewGuid():N}";
+        var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Identity.Events";
+        var eventName = "Order.Updated";
+        var clientName = "Billing-Service";
+
+        using var eventBusA = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = streamName,
+                SubjectPrefix = subjectPrefix,
+                ClientName = clientName
+            }));
+        using var eventBusB = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = streamName,
+                SubjectPrefix = subjectPrefix,
+                ClientName = clientName
+            }));
+
+        var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var deliveryCount = 0;
+        using var subscriptionA = eventBusA.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ =>
+            {
+                Interlocked.Increment(ref deliveryCount);
+                received.TrySetResult();
+            }));
+        using var subscriptionB = eventBusB.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ =>
+            {
+                Interlocked.Increment(ref deliveryCount);
+                received.TrySetResult();
+            }));
+
+        await eventBusA.InitializeAsync();
+        await eventBusB.InitializeAsync();
+
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+        var consumerName = System.Text.RegularExpressions.Regex.Replace(
+            $"{streamName}_{clientName}_{eventName}",
+            @"[^a-zA-Z0-9\-_]",
+            "_");
+
+        var consumerReady = false;
+        for (var iteration = 0; iteration < 50 && !consumerReady; iteration++)
+        {
+            try
+            {
+                await js.GetConsumerAsync(streamName, consumerName);
+                consumerReady = true;
+            }
+            catch (NatsJSApiException)
+            {
+                await Task.Delay(100);
+            }
+        }
+
+        consumerReady.ShouldBeTrue("replicas with the same ClientName must share one durable consumer");
+
+        await eventBusA.PublishAsync(
+            typeof(DynamicEventData),
+            new DynamicEventData(eventName, new { Value = 1 }),
+            onUnitOfWorkComplete: false,
+            useOutbox: false);
+
+        await received.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.Delay(500);
+        Volatile.Read(ref deliveryCount).ShouldBe(1);
+    }
+
+    [NatsFact]
+    public async Task EventBus_ClientName_Should_Not_Fall_Back_To_AbpNats_ClientName()
+    {
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = $"Identity_{Guid.NewGuid():N}",
+                SubjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Identity.Events"
+            }));
+
+        var exception = await Should.ThrowAsync<AbpException>(() => eventBus.InitializeAsync());
+        exception.Message.ShouldContain("TrueParser:EventBus:Nats:ClientName is required");
+    }
+
+    [NatsFact]
+    public async Task Missing_ClientName_Should_Fail_During_Initialization()
+    {
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = $"Identity_{Guid.NewGuid():N}",
+                SubjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Identity.Events"
+            }));
+
+        var exception = await Should.ThrowAsync<AbpException>(() => eventBus.InitializeAsync());
+        exception.Message.ShouldContain("TrueParser:EventBus:Nats:ClientName is required");
+    }
+
+    [NatsFact]
+    public async Task Invalid_ClientName_Should_Fail_During_Initialization()
+    {
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = $"Identity_{Guid.NewGuid():N}",
+                SubjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Identity.Events",
+                ClientName = "!!!"
+            }));
+
+        var exception = await Should.ThrowAsync<AbpException>(() => eventBus.InitializeAsync());
+        exception.Message.ShouldContain("must contain at least one letter or digit");
+    }
 }
 
 [EventName("TestEvent")]

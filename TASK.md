@@ -199,7 +199,7 @@ Verification record:
 
 ### 1.2 Durable Consumer and Service Identity Slice
 
-Status: `[ ]` Pending.
+Status: `[x]` Complete.
 
 Problem statement:
 
@@ -210,18 +210,30 @@ instead of receiving independent fan-out copies.
 
 Scope:
 
-- [ ] Add an explicit event-bus consumer identity option, `ClientName`, without changing the existing NATS connection option contract.
-- [ ] Define and document the fallback to `AbpNatsOptions.ClientName` where appropriate.
-- [ ] Generate sanitized durable names from `{StreamName}_{ClientName}_{EventName}`.
-- [ ] Fail startup with an actionable configuration exception when a stable valid consumer identity cannot be resolved; do not use a random process identity.
-- [ ] Add focused live tests for different service identities, same-identity replicas, and restart/resume behavior.
+- [x] Add an explicit event-bus consumer identity option, `ClientName`, without changing the existing NATS connection option contract.
+- [x] Require and document explicit event-bus `ClientName`; keep it independent from `AbpNatsOptions.ClientName`.
+- [x] Generate sanitized durable names from `{StreamName}_{ClientName}_{EventName}`.
+- [x] Fail startup with an actionable configuration exception when a stable valid consumer identity cannot be resolved; do not use a random process identity.
+- [x] Add focused live tests for different service identities, same-identity replicas, restart/resume behavior, and strict identity validation.
 
 Completion criteria:
 
-- [ ] Different `ClientName` values receive independent copies of the same event.
-- [ ] Replicas with the same `ClientName` share one logical durable consumer and do not duplicate service delivery.
-- [ ] Restart with the same identity resumes the same durable consumer.
-- [ ] Invalid or missing stable identity fails clearly.
+- [x] Different `ClientName` values receive independent copies of the same event.
+- [x] Replicas with the same `ClientName` share one logical durable consumer and do not duplicate service delivery.
+- [x] Restart with the same identity resumes the same durable consumer.
+- [x] Invalid or missing stable identity fails clearly.
+
+Verification record:
+
+- Regression-first check: `Different_ClientNames_Should_Create_Independent_Consumers_And_Receive_The_Event` was run against the pre-fix durable naming logic and failed because the two identity-specific durable consumers were not created.
+- Added required `NatsDistributedEventBusOptions.ClientName`; `AbpNatsOptions.ClientName` remains exclusively a NATS connection-layer name and is never used for durable identity.
+- Durable names now sanitize `{StreamName}_{ClientName}_{EventName}`. Initialization throws an actionable `AbpException` when the explicit event-bus identity is missing or contains no usable letter/digit.
+- Added live coverage for independent fan-out, same-identity load balancing, rejection of connection-name fallback, and missing/invalid identity validation. Existing unsubscribe/restart coverage verifies reuse of the stable durable identity.
+- Roslyn Debug build for the test project: succeeded with 0 warnings and 0 errors.
+- Focused identity tests: 5 passed with `RUN_NATS_TESTS=true`.
+- Normal test project: 1 passed, 13 skipped by the NATS gate.
+- Full live test project: 14 passed, 0 failed.
+- No message-ID, Inbox/Outbox, wildcard, delivery, retention, poison-message, stream-management, or notification semantics were changed.
 
 ### 1.3 Stable Message and Event Identity Slice
 

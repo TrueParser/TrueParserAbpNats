@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -84,6 +85,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
     public virtual async Task InitializeAsync()
     {
+        ResolveClientName();
         await EnsureStreamExistsAsync();
         SubscribeHandlers(AbpDistributedEventBusOptions.Handlers);
         await WaitForConsumerStartupsAsync();
@@ -211,7 +213,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         try
         {
             var subject = GetSubjectName(eventName);
-            var consumerName = SanitizeConsumerName($"{NatsOptions.StreamName}_{eventName}");
+            var consumerName = GetConsumerName(eventName);
 
             // CreateLinkedTokenSource can throw ObjectDisposedException if _shutdownCts was already disposed.
             // That is caught by the outer catch below, which signals startup complete and exits.
@@ -449,6 +451,32 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         }
 
         return prefetchCount;
+    }
+
+    private string GetConsumerName(string eventName)
+    {
+        return SanitizeConsumerName($"{NatsOptions.StreamName}_{ResolveClientName()}_{eventName}");
+    }
+
+    private string ResolveClientName()
+    {
+        var clientName = NatsOptions.ClientName;
+
+        if (string.IsNullOrWhiteSpace(clientName))
+        {
+            throw new AbpException(
+                "TrueParser:EventBus:Nats:ClientName is required for stable NATS durable consumer identity. Configure NatsDistributedEventBusOptions.ClientName.");
+        }
+
+        clientName = clientName.Trim();
+        var sanitizedClientName = SanitizeConsumerName(clientName);
+        if (!Regex.IsMatch(sanitizedClientName, "[a-zA-Z0-9]"))
+        {
+            throw new AbpException(
+                "The NATS event-bus ClientName must contain at least one letter or digit so it can form a valid durable consumer name.");
+        }
+
+        return clientName;
     }
 
     private async Task ProcessMessageAsync(string eventName, INatsJSMsg<byte[]> msg)

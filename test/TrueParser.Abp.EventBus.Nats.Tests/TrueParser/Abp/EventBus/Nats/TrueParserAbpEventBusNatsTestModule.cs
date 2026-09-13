@@ -32,12 +32,14 @@ public class TrueParserAbpEventBusNatsTestModule : AbpModule
         Configure<AbpNatsOptions>(options =>
         {
             options.Connections = "nats://localhost:4222";
+            options.ClientName = "TrueParserConnection";
         });
         
         Configure<NatsDistributedEventBusOptions>(options =>
         {
             options.StreamName = $"TrueParserTestEvents_{RunId}";
             options.SubjectPrefix = $"{RunId}.TrueParser.Test.Events";
+            options.ClientName = "TrueParserTests";
         });
     }
 }

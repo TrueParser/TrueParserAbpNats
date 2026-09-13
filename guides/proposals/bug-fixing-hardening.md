@@ -134,13 +134,14 @@ public string? ClientName { get; set; }
 
 to `NatsDistributedEventBusOptions`.
 
-Resolve it with backward-compatible fallback to:
+`NatsDistributedEventBusOptions.ClientName` is required. Do not fall back to
+`AbpNatsOptions.ClientName`: the former is the logical ABP event-bus consumer
+identity, while the latter belongs exclusively to the NATS connection layer.
 
-```csharp
-AbpNatsOptions.ClientName
-```
-
-if appropriate.
+Fail startup with an actionable configuration exception when the explicit
+event-bus `ClientName` is null, empty, or whitespace-only. Existing legacy
+durables named `{StreamName}_{EventName}` do not require transport-level
+migration or compatibility handling.
 
 Generate durable consumer names from:
 

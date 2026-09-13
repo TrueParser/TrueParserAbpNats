@@ -10,6 +10,12 @@ public class NatsDistributedEventBusOptions
 
     public string? ConnectionName { get; set; }
 
+    /// <summary>
+    /// Required stable logical service identity used when naming durable consumers.
+    /// This is independent of the NATS connection-layer client name.
+    /// </summary>
+    public string? ClientName { get; set; }
+
     public StreamConfigRetention Retention { get; set; } = StreamConfigRetention.Interest;
 
     public int ReplicaCount { get; set; } = 1;
