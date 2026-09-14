@@ -16,6 +16,7 @@
     <PackageReference Include="Serilog.Extensions.Logging" />
     <PackageReference Include="Serilog.Sinks.File" />
     <PackageReference Include="NATS.Net" />
+    <PackageReference Include="NATS.Jwt" />
     <PackageReference Include="MySql.EntityFrameworkCore" />
     <PackageReference Include="Volo.Abp.EntityFrameworkCore" />
     <PackageReference Include="Volo.Abp.EntityFrameworkCore.MySQL" />

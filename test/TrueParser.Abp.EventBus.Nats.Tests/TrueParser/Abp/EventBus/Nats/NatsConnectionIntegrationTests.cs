@@ -10,8 +10,16 @@ using AbpNatsConnectionPool = TrueParser.Abp.Nats.NatsConnectionPool;
 
 namespace TrueParser.Abp.EventBus.Nats;
 
+[Collection("NATS JWT")]
 public sealed class NatsConnectionIntegrationTests
 {
+    private readonly NatsJwtTestFixture _jwtFixture;
+
+    public NatsConnectionIntegrationTests(NatsJwtTestFixture jwtFixture)
+    {
+        _jwtFixture = jwtFixture;
+    }
+
     [NatsEnvironmentFact("NATS_AUTH_TEST_URL", "NATS_AUTH_TEST_USERNAME", "NATS_AUTH_TEST_PASSWORD")]
     public async Task UsernamePassword_Authentication_With_Valid_Credentials_Should_Connect()
     {
@@ -44,27 +52,27 @@ public sealed class NatsConnectionIntegrationTests
         });
     }
 
-    [NatsEnvironmentFact("NATS_JWT_TEST_URL", "NATS_JWT_TEST_JWT", "NATS_JWT_TEST_SEED")]
+    [NatsFact]
     public async Task JwtSeed_Authentication_With_Valid_Test_Credentials_Should_Connect()
     {
         var options = new AbpNatsOptions
         {
-            Connections = RequiredEnvironmentVariable("NATS_JWT_TEST_URL"),
-            Jwt = RequiredEnvironmentVariable("NATS_JWT_TEST_JWT"),
-            Seed = RequiredEnvironmentVariable("NATS_JWT_TEST_SEED")
+            Connections = _jwtFixture.Url,
+            Jwt = _jwtFixture.Jwt,
+            Seed = _jwtFixture.Seed
         };
 
         await VerifyJetStreamPublishAndConsumeAsync(options, "JwtSeed.Valid");
     }
 
-    [NatsEnvironmentFact("NATS_JWT_TEST_URL", "NATS_JWT_TEST_JWT", "NATS_JWT_TEST_SEED")]
+    [NatsFact]
     public async Task JwtSeed_Authentication_With_Invalid_Seed_Should_Fail()
     {
         var options = new AbpNatsOptions
         {
-            Connections = RequiredEnvironmentVariable("NATS_JWT_TEST_URL"),
-            Jwt = RequiredEnvironmentVariable("NATS_JWT_TEST_JWT"),
-            Seed = RequiredEnvironmentVariable("NATS_JWT_TEST_SEED") + "invalid"
+            Connections = _jwtFixture.Url,
+            Jwt = _jwtFixture.Jwt,
+            Seed = _jwtFixture.Seed + "invalid"
         };
 
         await Should.ThrowAsync<Exception>(async () =>
@@ -200,7 +208,10 @@ public sealed class NatsConnectionIntegrationTests
         }
         finally
         {
-            await DeleteStreamIfPresentAsync(jetStream, streamName);
+            await DeleteStreamIfPresentAsync(
+                jetStream,
+                streamName,
+                ignoreNoResponse: !string.IsNullOrWhiteSpace(options.Jwt));
         }
     }
 
@@ -217,7 +228,10 @@ public sealed class NatsConnectionIntegrationTests
         }
     }
 
-    private static async Task DeleteStreamIfPresentAsync(INatsJSContext jetStream, string streamName)
+    private static async Task DeleteStreamIfPresentAsync(
+        INatsJSContext jetStream,
+        string streamName,
+        bool ignoreNoResponse = false)
     {
         try
         {
@@ -225,6 +239,12 @@ public sealed class NatsConnectionIntegrationTests
         }
         catch (NatsJSApiException ex) when (ex.Error.Code == 404)
         {
+        }
+        catch (NatsJSApiNoResponseException) when (ignoreNoResponse)
+        {
+            // The JWT fixture is an ephemeral server and its non-admin user
+            // does not need stream-management permissions. The server and its
+            // temporary storage are disposed after the test class completes.
         }
     }
 

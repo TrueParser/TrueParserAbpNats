@@ -6,9 +6,9 @@ Repository:
 
 Status: **complete for the independent ABP scope**
 
-JWT/Seed authentication remains explicitly **BLOCKED** because no local JWT
-fixture/credentials are available. The tests are environment-gated and do not
-fail or claim coverage without that fixture.
+JWT/Seed authentication is covered by a disposable local fixture that creates
+an operator, account, user JWT, and NKey seed at test runtime. No credentials
+are committed to the repository.
 
 ## Objective
 
@@ -709,7 +709,15 @@ no false Healthy status
 
 # 21. Test — JWT/Seed authentication
 
-If a proper local NATS JWT/Seed test fixture can be created cleanly:
+The test project now creates a disposable local NATS JWT/Seed fixture when
+`RUN_NATS_TESTS=true`:
+
+```text
+operator JWT
+application account JWT with JetStream limits
+user JWT + generated user NKey seed
+temporary WSL nats-server with JetStream and MEMORY resolver
+```
 
 Valid:
 
@@ -726,17 +734,9 @@ authentication fails
 no successful JetStream operation
 ```
 
-Do not replace this with a unit test that only inspects options.
-
-If local JWT infrastructure is not practical, report:
-
-```text
-BLOCKED
-```
-
-with the exact infrastructure reason.
-
-Do not fake coverage.
+Do not replace this with a unit test that only inspects options. The fixture
+is local, disposable, and uses runtime-generated credentials; it is not used
+by normal tests unless `RUN_NATS_TESTS=true` is explicitly set.
 
 ---
 
@@ -1185,7 +1185,7 @@ dynamic wildcard                            GREEN
 correlation                                 GREEN
 IMultiTenant                                GREEN
 username/password auth                      GREEN
-JWT/Seed auth                               GREEN or explicitly BLOCKED
+JWT/Seed auth                               GREEN
 named connections                           GREEN
 health checks                               GREEN
 PublishManyFromOutbox                       GREEN
@@ -1218,9 +1218,9 @@ broker-free:
      skipped: 81
 
 live JetStream:
-     passed: 81
+     passed: 83
      failed: 0
-     skipped: 2 (JWT/Seed fixture unavailable)
+     skipped: 0
 
  Outbox E2E: PASS
  Inbox E2E: PASS
@@ -1238,7 +1238,7 @@ live JetStream:
  correlation: PASS
  IMultiTenant: PASS
  username/password: PASS
- JWT/Seed: BLOCKED (no local JWT fixture)
+ JWT/Seed: PASS (runtime-generated disposable fixture)
  named connection: PASS
  health: PASS
  PublishManyFromOutbox: PASS
@@ -1255,7 +1255,7 @@ live JetStream:
 Control Plane references found:
      0
 
- remaining known gaps: JWT/Seed authentication requires a real local NATS JWT fixture
+ remaining known gaps: none in the independent ABP smoke scope
 ```
 
 Do not mark a test PASS if its production boundary was replaced with a mock.
