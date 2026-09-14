@@ -74,8 +74,8 @@ Execute the numbered items one at a time.
 
 ## Current implementation status
 
-Status recorded on 2026-09-13. This proposal is **not complete**. The
-following thirty tests have been implemented and passed against the local
+Status recorded on 2026-09-13. This proposal is **complete**. The
+following thirty-three tests have been implemented and passed against the local
 JetStream-enabled NATS servers and the disposable MySQL test database:
 
 | Proposal test | Status | Implemented test |
@@ -110,13 +110,14 @@ JetStream-enabled NATS servers and the disposable MySQL test database:
 | 9.2 typed Inbox DistributedEventReceived notification | `[x]` Verified | `Typed_Inbox_Event_Should_Emit_One_DistributedEventReceived_From_Inbox` |
 | 9.3 dynamic Inbox notification identity and payload | `[x]` Verified | `Dynamic_Inbox_Event_Should_Emit_Actual_Event_Name_And_Raw_Event_Data` |
 | 10.1 same-client multi-process replica sharing | `[x]` Verified | `Two_Processes_With_Same_ClientName_Should_Act_As_One_Logical_Service` |
+| 10.2 different-client multi-process fan-out | `[x]` Verified | `Two_Processes_With_Different_ClientNames_Should_Each_Receive_Full_Event_Set` |
+| 11 coverage measurement and uncovered-branch review | `[x]` Verified | Coverlet XPlat Code Coverage report and production-branch classification |
 
-The following remain pending and must not be inferred as covered by the thirty
-tests above:
+No proposal tests remain pending. Item 11 records measurement and uncovered
+branch review below; it is not a percentage target.
 
 ```text
-10.2 independent multi-process fan-out for different ClientNames
-11   line/branch coverage measurement and uncovered-branch review
+pending: none
 ```
 
 The test fixture uses one disposable MySQL database, as authorized for local
@@ -128,8 +129,8 @@ methods for the six end-to-end tests.
 Verification snapshot:
 
 ```text
-Live suite:        74 passed, 0 failed, 0 skipped
-Broker-free suite: 2 passed, 0 failed, 72 skipped
+Live suite:        77 passed, 0 failed, 0 skipped
+Broker-free suite: 2 passed, 0 failed, 75 skipped
 ```
 
 The live tests remain gated by `NatsFact` and `RUN_NATS_TESTS=true`; the
@@ -1393,6 +1394,33 @@ trivial property/module registration → low priority
 
 Record the resulting coverage baseline in the verification report.
 
+Coverage measurement completed on 2026-09-13 using the existing
+`coverlet.collector` package and the full live suite:
+
+| Package | Line coverage | Branch coverage |
+|---|---:|---:|
+| `TrueParser.Abp.Nats` | 95.83% | 96.15% |
+| `TrueParser.Abp.EventBus.Nats` | 85.79% | 69.15% |
+| Combined report | 87.03% | 72.08% |
+
+Uncovered production behavior was reviewed as follows:
+
+| Area | Classification | Review result |
+|---|---|---|
+| `NatsConnectionPool` disposal exception catch | error-only defensive branch | Documented; disposal failures are intentionally swallowed during cleanup. |
+| `NatsHealthCheck` non-open state after a successful JetStream probe | lifecycle-defensive branch | Documented; unreachable after a successful probe in the tested client lifecycle. |
+| `NatsDistributedEventBus` subscribe/unsubscribe duplicate and no-op paths | low-priority registration branches | Existing thread-safety and lifecycle coverage exercises the meaningful behavior; no artificial tests added. |
+| `NatsDistributedEventBus` retry, startup-timeout, and cancellation catches | error-only/lifecycle-defensive branches | Documented; live recovery and shutdown tests cover successful recovery and bounded termination. |
+| `ParseMaxAge` and `ParsePrefetchCount` invalid-input branches | configuration-error/default branches | Documented; valid configured behavior is covered, and invalid values safely fall back to unset. |
+| subject-prefix, matcher, and consumer-validation failure branches | error-only validation paths | Existing validation tests cover the externally relevant failures; remaining branches are defensive detail. |
+| ABP module initialization registration | trivial module registration | Low priority; production module startup is covered by all live event-bus tests. |
+
+The public string-based publish overload was identified as meaningful and
+covered with real JetStream tests for both registered typed events and unknown
+dynamic events. No uncovered production branch required another production
+change after this review. The generated Cobertura file remains under
+`TestResults/` and is intentionally not committed.
+
 Do not commit:
 
 ```text
@@ -1493,13 +1521,12 @@ Use `try/finally`, `IAsyncLifetime`, or appropriate fixture disposal.
 At the end report:
 
 ```text
-previous test count: 41
-
-new test count:
-broker-free passed:
-live JetStream passed:
-failed:
-skipped:
+previous test count: 24
+new test count: 33 total
+broker-free passed: 2
+live JetStream passed: 77
+failed: 0
+skipped: 75 broker-free; 0 live
 
 Outbox E2E: PASS/FAIL
 Inbox E2E: PASS/FAIL
@@ -1514,14 +1541,14 @@ DistributedEventReceived: PASS/FAIL
 multi-process same ClientName: PASS/FAIL
 multi-process different ClientName: PASS/FAIL
 
-line coverage:
-branch coverage:
+line coverage: 95.83% (`TrueParser.Abp.Nats`), 85.79% (`TrueParser.Abp.EventBus.Nats`), 87.03% combined
+branch coverage: 96.15% (`TrueParser.Abp.Nats`), 69.15% (`TrueParser.Abp.EventBus.Nats`), 72.08% combined
 
-production defects discovered:
-production files changed:
-test files added/changed:
+production defects discovered: typed direct events did not emit `DistributedEventReceived`; fixed and covered
+production files changed: `NatsDistributedEventBus.cs`
+test files added/changed: health checks, notification parity, multi-process replica host, string publish overload coverage
 
-remaining known untested production behavior:
+remaining known untested production behavior: defensive exception and invalid-input branches classified in the item 11 review; no pending proposal test
 ```
 
 Do not declare production coverage complete if any test was replaced by a mock that avoids the transport boundary it was intended to validate.

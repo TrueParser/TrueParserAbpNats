@@ -1,733 +1,306 @@
-# Control Plane — RabbitMQ → NATS Migration Acceptance Suite
+# TrueParserAbpNats — Independent ABP Compatibility Smoke Harness
 
 Repository:
 
-`TrueParser/TrueParserControlPlane`
+`TrueParser/TrueParserAbpNats`
+
+Status: **complete for the independent ABP scope**
+
+JWT/Seed authentication remains explicitly **BLOCKED** because no local JWT
+fixture/credentials are available. The tests are environment-gated and do not
+fail or claim coverage without that fixture.
 
 ## Objective
 
-Before RabbitMQ is removed from Control Plane, prove that every production distributed-event path that currently depends on ABP RabbitMQ behaves correctly through:
+Add a **standalone ABP-based compatibility smoke harness** that proves `TrueParser.Abp.EventBus.Nats` works correctly in a real ABP application using:
 
 ```text
-TrueParser.Abp.EventBus.Nats
-+
-NATS JetStream
-+
-existing ABP Inbox
-+
-existing ABP Outbox
-```
-
-This is a **migration acceptance gate**, not a generic NATS test suite.
-
-`TrueParserAbpNats` already owns transport-level tests.
-
-These tests must prove that the **actual Control Plane application** continues to behave correctly after swapping transports.
-
----
-
-# 1. Hard rule
-
-Do not consider the RabbitMQ → NATS migration complete because:
-
-```text
-NATS connects
-one event publishes
-one handler runs
-```
-
-That is insufficient.
-
-Acceptance requires:
-
-```text
-every distributed event contract currently used by Control Plane
-+
-every distributed handler
-+
-every domain-event → distributed-event bridge
-+
-ABP Inbox/Outbox
-+
-cache invalidation events
-+
-important chained workflows
-```
-
-to be verified against NATS.
-
-Do not remove RabbitMQ packages/configuration until this suite is GREEN.
-
----
-
-# 2. First build the authoritative event graph
-
-Before writing tests, use Roslyn MCP as the primary code-navigation mechanism.
-
-Do not derive the event inventory from filenames alone.
-
-Discover all implementations/references of:
-
-```csharp
-IDistributedEventHandler<T>
-IDistributedEventBus
-PublishAsync(...)
-PublishManyAsync(...)
-```
-
-Also locate:
-
-```text
-[EventName(...)]
-domain event handlers that publish distributed ETOs
-background workers that publish events
-host-level distributed handlers
-ABP framework ETO handlers used for cache coherence
-```
-
-Generate a migration matrix:
-
-```text
-Producer
-Domain/source event
-Distributed ETO
-EventName
-Uses Outbox?
-Distributed handler(s)
-Uses Inbox?
-Expected business side effect
-Tenant-sensitive?
-External side effect?
-Smoke test
-```
-
-The repository ADR currently identifies the event-driven surface across:
-
-```text
-Application/EventHandlers
-Application.Contracts/Events
-Domain/Events
-```
-
-but the source code is authoritative.
-
-Do not rely solely on ADR documentation because new handlers may have been added after the ADR.
-
----
-
-# 3. Known Control Plane distributed-event surface
-
-At minimum verify all currently active contracts discovered under:
-
-```text
-TrueParser.ControlPlane.Application.Contracts/Events
-```
-
-including the known families:
-
-```text
-CustomTenantRegisteredEto
-Customer*
-DodoWebhookReceivedEto
-HostApplicationCreatedEto
-InvitationAcceptedEto
-InvitationSentEto
-Payment*
-PlanChangedEto
-PlanRetiredEto
-PlanSync*
-RotateTenantKeyEto
-Subscription*
-TenantApplicationLifecycleEto
-TenantStatusChangedEto
-```
-
-Do not assume one class per source file.
-
-Some files contain multiple ETO types.
-
-Every concrete ETO with a production publisher or distributed handler must appear in the matrix.
-
----
-
-# 4. Include host-level distributed events
-
-Do not restrict the audit to the ControlPlane module.
-
-The HTTP host also contains distributed handlers used for cache/security coherence.
-
-At minimum inspect and test:
-
-```text
-UserStatusChangedEto
-TenantStatusChangedEto
-TenantSigningKeyChangedEto
-```
-
-and any additional distributed handler found under:
-
-```text
-src/TrueParser.HttpApi.Host/EventHandlers
-```
-
-Current known handlers include cache invalidation for:
-
-```text
-user status
-tenant status
-tenant signing keys
-```
-
-These are production-critical because stale distributed caches can change authentication or authorization behavior.
-
----
-
-# 5. Test the real application path
-
-For important workflows, do NOT write only:
-
-```csharp
-await eventBus.PublishAsync(testEto);
-```
-
-followed by a synthetic test handler.
-
-That proves serialization and routing but not the actual migration.
-
-The strongest smoke path is:
-
-```text
-real application/domain operation
-        ↓
-domain event
-        ↓
-existing domain-event handler
-        ↓
-existing distributed ETO
-        ↓
-ABP Outbox / TrueParserDbContext
-        ↓
-ABP OutboxSender
-        ↓
-NATS JetStream
-        ↓
-NATS durable consumer
-        ↓
-ABP Inbox / TrueParserDbContext
-        ↓
-ABP InboxProcessor
-        ↓
-real production distributed handler
-        ↓
-observable business side effect
-```
-
-Where practical, test this complete chain.
-
----
-
-# 6. Infrastructure for the acceptance suite
-
-Use:
-
-```text
-real Control Plane host/test application
-real MySQL test database
-real Redis
-real local NATS JetStream
-real TrueParser.Abp.EventBus.Nats
-real ABP Inbox
+ABP 10.6
+real ABP UoW
 real ABP Outbox
+real ABP Inbox
+real ABP background processors
+EF Core persistence
+real NATS JetStream
+TrueParser.Abp.EventBus.Nats
 ```
 
-Do not mock:
+This test harness must remain **100% independent of TrueParser Control Plane**.
+
+Do not reference or import:
 
 ```text
-IDistributedEventBus
-NatsDistributedEventBus
-IEventInbox
-IEventOutbox
-NATS connection
-JetStream
-Redis cache
+TrueParserControlPlane
+TrueParserDbContext
+Control Plane ETOs
+Control Plane handlers
+Control Plane business services
+Control Plane configuration
+Control Plane migrations
 ```
 
-when the behavior under test crosses those boundaries.
-
-External third-party systems may be replaced with controlled test doubles:
-
-```text
-SMTP/email delivery
-Dodo remote APIs
-Infisical/external secret service where necessary
-```
-
-We are testing transport/application integration, not sending real external traffic.
+The package must be testable as a public, reusable ABP infrastructure package.
 
 ---
 
-# 7. Per-event transport smoke test
+# 1. Architecture
 
-For **every concrete distributed ETO** in the authoritative matrix, add at least one transport smoke.
+Add an independent smoke application/test fixture.
 
-Pattern:
-
-```text
-publish real ETO
-↓
-ABP Outbox if production path uses Outbox
-↓
-NATS
-↓
-ABP Inbox if configured
-↓
-real matching handler
-```
-
-## Expected assertions
-
-For every ETO:
+Preferred structure:
 
 ```text
-correct EventName used
-serialization succeeds
-deserialization returns correct CLR type
-all important payload fields survive
-correct handler is invoked
-unrelated handler is not invoked
-handler invocation count is exactly expected
-no exception logged by consumer
-message is ACKed after successful processing
+test/
+├── TrueParser.Abp.EventBus.Nats.Tests/
+│
+├── TrueParser.Abp.EventBus.Nats.Smoke.Contracts/
+│   └── generic smoke ETOs
+│
+├── TrueParser.Abp.EventBus.Nats.Smoke.Publisher/
+│   └── independent ABP publisher application
+│
+├── TrueParser.Abp.EventBus.Nats.Smoke.Consumer/
+│   └── independent ABP consumer application
+│
+└── TrueParser.Abp.EventBus.Nats.Smoke.Tests/
+    └── orchestration/integration tests
 ```
 
-Do not accept a test whose only assertion is:
+If a smaller architecture can provide the same process-level guarantees, use it.
 
-```text
-PublishAsync did not throw
-```
+Do not create unnecessary abstraction layers.
 
 ---
 
-# 8. Business-side-effect smoke tests
+# 2. Generic test domain
 
-For each real handler, verify its meaningful outcome.
-
-Examples follow; Codex must derive the exact assertion from current code.
-
-## 8.1 Invitation events
-
-For:
-
-```text
-InvitationSentEto
-InvitationAcceptedEto
-```
-
-Expected:
-
-```text
-correct production handler invoked
-correct tenant/user/invitation identifiers received
-expected email/onboarding side effect requested
-no duplicate side effect
-```
-
-Do not send real email.
-
-Capture the configured email sender/test double and assert the production handler attempted exactly the expected message.
-
----
-
-## 8.2 Plan changes
-
-For:
-
-```text
-PlanChangedEto
-PlanRetiredEto
-PlanSync*
-```
-
-Expected depending on actual handler:
-
-```text
-correct plan retrieved/updated
-correct dependent application state changed
-correct notification requested
-correct external-sync operation requested
-no unrelated plan affected
-```
-
-If one domain event publishes another distributed ETO, test the complete chain.
-
----
-
-## 8.3 Customer/subscription/payment pipeline
-
-Test all production ETOs discovered for:
-
-```text
-Customer
-Subscription
-Payment
-```
-
-Expected:
-
-```text
-correct state transition
-correct identifiers preserved
-idempotent processing
-no duplicate customer/subscription/payment mutation
-```
-
-For Dodo-facing effects, mock only the external Dodo HTTP boundary, not the distributed bus.
-
----
-
-## 8.4 Dodo webhook
-
-For:
-
-```text
-DodoWebhookReceivedEto
-```
-
-Use the real webhook consumer.
-
-Expected:
-
-```text
-NATS delivery occurs
-ABP Inbox receives event
-DodoWebhookConsumer invoked
-real application-level webhook processing invoked
-same logical webhook is not processed twice
-```
-
-This path is particularly important because the current handler explicitly relies on transactional processing/idempotency.
-
----
-
-## 8.5 Host application
-
-For:
-
-```text
-HostApplicationCreatedEto
-```
-
-and any related lifecycle ETO:
-
-Expected:
-
-```text
-correct handler invoked
-correct application ID/name/metadata preserved
-expected downstream notification/side effect invoked once
-```
-
----
-
-## 8.6 Tenant application lifecycle
-
-For:
-
-```text
-TenantApplicationLifecycleEto
-```
-
-Expected:
-
-```text
-correct tenant application selected
-correct lifecycle operation applied
-correct related notification generated where applicable
-another tenant/application remains untouched
-```
-
----
-
-## 8.7 Key rotation
-
-Test:
-
-```text
-KeyRotationPoller
-    ↓
-RotateTenantKeyEto
-    ↓
-RotateTenantKeyEventHandler
-```
-
-Expected:
-
-```text
-event published through NATS
-correct tenant/key identity reaches handler
-SigningKeyManager called exactly once
-resulting signing-key lifecycle event is published if production code does so
-cache-coherence event reaches host handler
-```
-
-This should be tested as an event chain where possible.
-
----
-
-# 9. Cache-coherence smoke tests
-
-These are mandatory.
-
-## 9.1 User status
-
-Trigger the production path resulting in:
-
-```text
-UserStatusChangedEto
-```
-
-Prime Redis with the old user-status cache entry.
-
-Expected:
-
-```text
-event crosses NATS
-UserCacheInvalidationHandler runs
-target cache entry invalidated
-unrelated user cache entry remains
-```
-
----
-
-## 9.2 Tenant status
-
-Prime:
-
-```text
-TenantStatusCacheItem
-```
-
-Trigger:
-
-```text
-TenantStatusChangedEto
-```
-
-Expected:
-
-```text
-target tenant cache entry invalidated
-unrelated tenant cache entry remains intact
-```
-
----
-
-## 9.3 Tenant signing key
-
-Prime the signing-key coherence cache.
-
-Trigger:
-
-```text
-TenantSigningKeyChangedEto
-```
-
-Expected:
-
-```text
-NATS delivery
-TenantSigningKeyCacheInvalidationHandler invoked
-correct cache item removed/refreshed
-unrelated tenant key cache remains untouched
-```
-
-This test must be GREEN before RabbitMQ removal because this path affects signing-key coherence.
-
----
-
-# 10. Domain → distributed bridge verification
-
-Every domain-event handler that calls:
-
-```csharp
-IDistributedEventBus.PublishAsync(...)
-```
-
-must get a focused smoke test.
-
-Known areas to inspect include:
-
-```text
-HostApplicationDomainEventHandler
-InvitationDomainEventHandler
-PlanChangedDomainEventHandler
-PlanRetiredDomainEventHandler
-PlanSyncDomainEventHandler
-TenantApplicationLifecycleDomainEventHandler
-SigningKeyLifecycleChangedDomainEventHandler
-DodoEventHandlers
-KeyRotationPoller
-Identity status event bridge
-```
-
-For every bridge:
-
-```text
-raise/trigger original domain event
-↓
-observe expected distributed ETO enter Outbox
-↓
-allow OutboxSender to publish
-↓
-assert expected downstream handler behavior
-```
-
-Do not directly publish the ETO in these bridge tests.
-
-The point is to prove that the original business workflow still produces the same distributed event after migration.
-
----
-
-# 11. Event-name compatibility gate
-
-RabbitMQ and NATS must expose the **same ABP logical event names**.
-
-Before migration, freeze the authoritative set of:
-
-```text
-CLR event type
-→ EventNameAttribute / ABP resolved name
-```
-
-After migration assert every name remains identical.
+Create only generic smoke-test contracts.
 
 Example:
 
-```text
-PlanChangedEto
-→ TrueParser.ControlPlane.PlanChanged
+```csharp
+[EventName("Smoke.OrderCreated")]
+public sealed class OrderCreatedEto
+{
+    public Guid Id { get; set; }
+
+    public string Name { get; set; } = string.Empty;
+}
 ```
 
-The migration must not accidentally turn event routing into CLR full names where an explicit `[EventName]` exists.
+Create a generic tenant event:
 
-Fail the migration if any logical event name changes.
+```csharp
+[EventName("Smoke.TenantOrderCreated")]
+public sealed class TenantOrderCreatedEto : IMultiTenant
+{
+    public Guid Id { get; set; }
+
+    public Guid? TenantId { get; set; }
+
+    public string Name { get; set; } = string.Empty;
+}
+```
+
+Create a generic test persistence entity such as:
+
+```text
+ProcessedSmokeEvent
+```
+
+that allows tests to prove handler business execution.
+
+Do not use production-specific terminology.
 
 ---
 
-# 12. Serialization fidelity gate
+# 3. Real ABP Inbox/Outbox infrastructure
 
-For each ETO family, include representative payloads containing:
+Create a test-only EF Core DbContext implementing:
+
+```csharp
+IHasEventOutbox
+IHasEventInbox
+```
+
+with:
+
+```csharp
+DbSet<OutgoingEventRecord>
+DbSet<IncomingEventRecord>
+DbSet<ProcessedSmokeEvent>
+```
+
+Configure:
+
+```csharp
+modelBuilder.ConfigureEventOutbox();
+modelBuilder.ConfigureEventInbox();
+```
+
+Configure ABP:
+
+```csharp
+options.Outboxes.Configure(config =>
+{
+    config.UseDbContext<SmokeDbContext>();
+});
+
+options.Inboxes.Configure(config =>
+{
+    config.UseDbContext<SmokeDbContext>();
+});
+```
+
+Use SQLite or another transactional test database.
+
+Do not use EF InMemory for tests that claim transaction correctness.
+
+---
+
+# 4. Real background workers
+
+The smoke harness must exercise actual ABP:
 
 ```text
-Guid
-nullable Guid
-DateTime / DateTimeOffset
-enum
-nullable enum
-decimal
-bool
-empty/null strings where valid
-collections where present
-nested DTOs where present
+OutboxSender
+OutboxSenderManager
+InboxProcessor
+InboxProcessManager
+```
+
+Do not manually call:
+
+```text
+PublishFromOutboxAsync
+ProcessFromInboxAsync
+```
+
+for the primary smoke tests.
+
+Existing focused tests may continue doing that.
+
+The smoke harness exists specifically to validate the complete ABP lifecycle.
+
+---
+
+# 5. Test — complete ABP flow
+
+Add:
+
+```text
+Committed_UoW_Should_Flow_Through_Outbox_NATS_Inbox_And_Handler
+```
+
+Flow:
+
+```text
+ABP application service
+↓
+transactional UoW
+↓
+IDistributedEventBus.PublishAsync<OrderCreatedEto>()
+↓
+EF Outbox
+↓
+UoW commit
+↓
+ABP OutboxSender
+↓
+NATS JetStream
+↓
+consumer
+↓
+EF Inbox
+↓
+ABP InboxProcessor
+↓
+IDistributedEventHandler<OrderCreatedEto>
+↓
+ProcessedSmokeEvent DB row
 ```
 
 Expected:
 
 ```text
-publisher object
-→ serialized NATS payload
-→ deserialized handler object
+before UoW commit:
+    processed row count = 0
+
+after UoW commit:
+    exactly one processed row exists
+    event ID matches publisher event
+    payload matches publisher payload
 ```
 
-preserves the values used by business logic.
+Also verify:
 
-This is particularly important because RabbitMQ and the NATS package may not use identical serializer implementation details even though they expose the same ABP abstraction.
+```text
+OutgoingEventInfo.Id
+==
+Nats-Msg-Id
+```
+
+where the transport exposes it.
 
 ---
 
-# 13. Outbox transactional smoke
+# 6. Test — rollback
 
-Use the real `TrueParserDbContext`.
-
-## 13.1 Commit
+Add:
 
 ```text
-business DB transaction
-+
-distributed event
+Rolled_Back_UoW_Should_Not_Reach_NATS_Or_Handler
 ```
 
-Expected before UoW commit:
+Flow:
 
 ```text
-no handler side effect
+begin transactional UoW
+publish distributed event
+rollback / do not CompleteAsync
 ```
-
-Expected after commit:
-
-```text
-Outbox record committed
-OutboxSender publishes to NATS
-handler eventually executes
-Outbox record cleared/marked appropriately
-```
-
----
-
-## 13.2 Rollback
-
-Create business mutation + event inside a transactional UoW.
-
-Rollback.
 
 Expected:
 
 ```text
-business mutation absent
-event not delivered
-no downstream handler execution
+no consumer execution
+no ProcessedSmokeEvent row
+no committed Outbox event eligible for sending
 ```
 
-This is a hard migration requirement.
-
----
-
-# 14. Inbox idempotency smoke
-
-Use a production-representative ETO and the real ABP Inbox.
-
-Deliver the same logical message ID more than once.
-
-Expected:
+Required invariant:
 
 ```text
-transport may redeliver
-Inbox identifies same message
-business handler side effect occurs once
+database rollback
+→ no broker side effect
 ```
-
-Assert the business side effect, not merely Inbox row count.
 
 ---
 
-# 15. NATS outage during Outbox publishing
+# 7. Test — broker unavailable after Outbox commit
+
+Add:
+
+```text
+Committed_Outbox_Event_Should_Survive_NATS_Outage_And_Send_After_Recovery
+```
 
 Scenario:
 
 ```text
-commit business transaction
-↓
-Outbox row exists
-↓
 NATS unavailable
+↓
+application UoW commits
+↓
+Outbox event committed
 ```
 
-Expected:
+Expected while NATS unavailable:
 
 ```text
-business transaction remains committed
 Outbox event remains waiting
-no fake successful send
+handler execution count = 0
+no false publish success
 ```
 
 Restart NATS.
@@ -735,462 +308,954 @@ Restart NATS.
 Expected:
 
 ```text
-ABP OutboxSender retries
-event is published
-real handler executes
-Outbox item eventually removed
+ABP OutboxSender retries automatically
+event reaches JetStream
+Inbox receives it
+handler executes once
+Outbox event is removed/marked sent afterward
 ```
 
-No manual re-publish.
+Do not manually republish.
 
 ---
 
-# 16. Control Plane restart with backlog
+# 8. Test — real Inbox duplicate protection
+
+Add:
+
+```text
+Duplicate_Message_Should_Not_Execute_Business_Handler_Twice
+```
+
+Use one stable message ID.
+
+Introduce the same logical message more than once using the closest possible real transport/redelivery path.
+
+Expected:
+
+```text
+business DB mutation count = 1
+```
+
+Do not accept only:
+
+```text
+Inbox row count = 1
+```
+
+The acceptance criterion is business execution.
+
+---
+
+# 9. Test — same ClientName across two processes
+
+Use two independent ABP consumer processes/applications:
+
+```text
+Consumer A
+ClientName = SmokeService
+
+Consumer B
+ClientName = SmokeService
+```
+
+Publish N uniquely identified events.
+
+Expected:
+
+```text
+combined unique handled IDs = N
+each event handled exactly once
+duplicate handled IDs = 0
+```
+
+Do not require equal load distribution.
+
+Required semantic:
+
+```text
+same ClientName
+→ same durable
+→ one logical service
+→ load-balanced delivery
+```
+
+---
+
+# 10. Test — different ClientNames
+
+Run:
+
+```text
+Consumer A
+ClientName = SmokeServiceA
+
+Consumer B
+ClientName = SmokeServiceB
+```
+
+Wait until both consumers are ready.
+
+Publish N events.
+
+Expected:
+
+```text
+A receives N unique events
+B receives N unique events
+```
+
+Required semantic:
+
+```text
+different ClientName
+→ independent durable consumers
+→ fan-out
+```
+
+---
+
+# 11. Test — restart and backlog recovery
+
+Add:
+
+```text
+Consumer_Restart_Should_Resume_Same_Durable_Backlog
+```
 
 Scenario:
 
 ```text
-event published
-durable exists
-handler/service stopped before completion or with pending backlog
-Control Plane shuts down
-Control Plane starts again
+consumer running
+↓
+durable created
+↓
+message retained/pending
+↓
+consumer process stops
+↓
+same consumer application restarts
+with same ClientName
 ```
 
 Expected:
 
 ```text
-same NATS ClientName
-→ same durable identity
-→ backlog resumes
-→ event eventually handled
+same durable identity reused
+pending event eventually processed
+no unrelated replacement durable created
 ```
 
-No new unrelated durable should be created for the same logical service.
+Use persistent JetStream storage for this test.
+
+Do not restart with an empty JetStream data directory.
 
 ---
 
-# 17. Duplicate/redelivery behavior
+# 12. Test — connection interruption and recovery
 
-For at least one DB-mutating handler:
+Add:
 
 ```text
-deliver
-handler completes business work
-simulate/redeliver same logical message
+Consumer_Should_Recover_After_NATS_Server_Restart
+```
+
+Flow:
+
+```text
+start NATS
+start ABP consumer
+publish event A
+verify A handled
+↓
+stop nats-server
+↓
+restart nats-server
+↓
+publish event B
 ```
 
 Expected:
 
 ```text
-business mutation occurs once
+existing ABP application recovers
+event B is handled
+no second InitializeAsync required
+no application restart required
 ```
 
-For side-effect handlers such as email, prove either:
-
-```text
-existing application idempotency prevents duplicate side effect
-```
-
-or document clearly if the application intentionally permits duplicate at-least-once side effects.
-
-Do not claim exactly-once semantics from NATS.
+If NATS.Net 3.2.0 has documented semantics requiring a different lifecycle, follow those semantics and document the exact behavior.
 
 ---
 
-# 18. Two-instance Control Plane smoke
+# 13. Test — clean shutdown
 
-Run two independent Control Plane instances/processes:
+Add:
 
 ```text
-Instance A
-ClientName = TrueParser.ControlPlane
-
-Instance B
-ClientName = TrueParser.ControlPlane
+ABP_Application_Shutdown_Should_Stop_NATS_Consumers_Cleanly
 ```
 
-Publish a set of uniquely identified events.
+Exercise the normal ABP application shutdown lifecycle.
 
-Expected:
-
-```text
-one shared logical service durable
-each event handled by exactly one instance
-no duplicated business side effects
-```
-
-Do not require equal distribution between A and B.
-
-Then test distinct logical consumers if Control Plane has any intentionally different `ClientName`s.
-
----
-
-# 19. Correlation ID
-
-For a representative workflow:
+Expected within a bounded timeout:
 
 ```text
-HTTP/application request
-→ domain event
-→ Outbox
-→ NATS
-→ Inbox
-→ handler
-```
-
-Expected:
-
-```text
-original ABP correlation ID
-==
-handler correlation ID
-```
-
-This must remain true across asynchronous processing.
-
----
-
-# 20. Multi-tenancy
-
-Do not implement custom NATS tenant-Inbox metadata merely for this test.
-
-Use production ETO behavior.
-
-For tenant-scoped ETOs implementing `IMultiTenant`, verify:
-
-```text
-publish Tenant A event
-→ handler CurrentTenant.Id == Tenant A
-```
-
-Also publish Tenant B.
-
-Expected:
-
-```text
-A handler never operates on B's entities
-B handler never operates on A's entities
-```
-
-For host events:
-
-```text
-CurrentTenant.Id == null
-```
-
-where that is the intended existing ABP behavior.
-
----
-
-# 21. Wrong-handler isolation
-
-Publish representative events with similar names.
-
-Expected:
-
-```text
-PlanChanged
-does not invoke PlanRetired handler
-
-TenantStatusChanged
-does not invoke UserStatusChanged handler
-
-CustomerCreated
-does not invoke SubscriptionCreated handler
-```
-
-This validates subject/event-name isolation after changing transports.
-
----
-
-# 22. Startup validation
-
-Start migrated Control Plane against:
-
-## Valid NATS configuration
-
-Expected:
-
-```text
-host starts
-stream created/validated
-all required durable consumers initialize
-health/readiness succeeds
-```
-
-## Wrong stream configuration
-
-Expected:
-
-```text
-startup fails clearly
-existing stream is not silently mutated
-```
-
-## Missing EventBus ClientName
-
-Expected:
-
-```text
-startup fails with actionable configuration error
-```
-
-No random/machine-generated fallback is permitted.
-
----
-
-# 23. Shutdown smoke
-
-With active subscriptions:
-
-```text
-start Control Plane
-publish/consume successfully
-initiate normal application shutdown
-```
-
-Expected:
-
-```text
-NATS consumer tasks stop
-event bus disposes
+event bus shutdown completes
+consumer loops stop
 connection pool disposes
-host exits normally
-no hung shutdown
-no unobserved consumer exception
+Inbox/Outbox workers stop
+process exits
 ```
 
-Then restart and verify normal event processing again.
+No:
+
+```text
+deadlock
+hang
+ObjectDisposedException
+unobserved background exception
+```
 
 ---
 
-# 24. Full localhost API smoke after migration
+# 14. Test — disposed consumer cannot continue consuming
 
-After all event-specific tests pass, run the existing full localhost smoke suite against the migrated host.
+Add:
 
-Do not weaken or skip existing tests.
+```text
+Disposed_Consumer_Should_Not_Receive_New_Messages
+```
+
+Scenario:
+
+```text
+start consumer A
+verify it consumes
+stop/dispose consumer A
+
+start consumer B with same durable identity
+publish event
+```
 
 Expected:
 
 ```text
-same HTTP/API behavior as pre-migration baseline
-authentication works
-tenant isolation works
-OpenIddict works
-Redis-backed behavior works
-MySQL behavior works
-background workers start
-no RabbitMQ dependency required
+consumer A invocation count does not increase
+consumer B handles event once
 ```
 
-Use the previously frozen localhost baseline as the regression comparison.
+This proves no leaked `ConsumeAsync` task remains alive.
 
 ---
 
-# 25. RabbitMQ removal audit
+# 15. Test — typed event
 
-Only after all migration tests are GREEN:
-
-Search with Roslyn/codebase tools for:
+Add complete application smoke:
 
 ```text
-Volo.Abp.EventBus.RabbitMq
-AbpEventBusRabbitMqModule
-AbpRabbitMqEventBusOptions
-RabbitMQ:
-RabbitMQ__
-RabbitMq
-rabbitmq
+Typed_Event_Should_Round_Trip_Through_Real_ABP_Inbox_Outbox
 ```
 
-Classify every result as:
+Expected:
 
 ```text
-production reference
-test reference
-historical documentation
-comment
-migration document
+correct EventName
+correct CLR type
+correct payload
+correct handler
+exactly one business execution
 ```
-
-Production target after final removal:
-
-```text
-RabbitMQ package reference             0
-RabbitMQ module dependency             0
-RabbitMQ runtime configuration         0
-RabbitMQ connection requirement        0
-RabbitMQ production code dependency    0
-```
-
-Historical ADRs may retain RabbitMQ references if explicitly describing history, but current architecture documentation must be updated.
 
 ---
 
-# 26. Migration acceptance matrix
+# 16. Test — dynamic exact event
 
-Codex must produce a table similar to:
+Create a dynamic event such as:
 
-| Event / workflow        | Producer          |   Outbox | NATS | Inbox | Handler                                  | Side effect          | Result |
-| ----------------------- | ----------------- | -------: | ---: | ----: | ---------------------------------------- | -------------------- | ------ |
-| InvitationSent          | domain bridge     |        ✓ |    ✓ |     ✓ | InvitationEmailHandler                   | email request        | PASS   |
-| PlanChanged             | domain bridge     |        ✓ |    ✓ |     ✓ | PlanChangedEmailHandler + others         | plan side effects    | PASS   |
-| DodoWebhookReceived     | HTTP webhook      | ✓/actual |    ✓ |     ✓ | DodoWebhookConsumer                      | webhook processing   | PASS   |
-| RotateTenantKey         | KeyRotationPoller | ✓/actual |    ✓ |     ✓ | RotateTenantKeyEventHandler              | signing key rotation | PASS   |
-| UserStatusChanged       | identity bridge   | ✓/actual |    ✓ |     ✓ | UserCacheInvalidationHandler             | Redis invalidation   | PASS   |
-| TenantSigningKeyChanged | key lifecycle     | ✓/actual |    ✓ |     ✓ | TenantSigningKeyCacheInvalidationHandler | Redis invalidation   | PASS   |
+```text
+Smoke.Dynamic.Created
+```
 
-The actual matrix must contain **every event and handler discovered by Roslyn**, not only these examples.
+Expected:
+
+```text
+actual event name preserved
+dynamic handler receives correct raw payload
+Inbox processing preserves actual event name
+```
 
 ---
 
-# 27. Hard acceptance criteria
+# 17. Test — dynamic wildcard event
 
-Migration is accepted only when:
+Subscribe:
 
 ```text
-TrueParserAbpNats full live test suite             GREEN
-
-Control Plane unit tests                           GREEN
-Control Plane application tests                    GREEN
-Control Plane domain tests                         GREEN
-Control Plane EF tests                             GREEN
-
-every distributed ETO smoke                        GREEN
-every production distributed handler               GREEN
-every domain → distributed bridge                  GREEN
-
-ABP Outbox real MySQL flow                         GREEN
-ABP Inbox real MySQL flow                          GREEN
-duplicate/redelivery idempotency                   GREEN
-broker outage/recovery                             GREEN
-restart/backlog                                    GREEN
-
-user cache invalidation                            GREEN
-tenant cache invalidation                          GREEN
-signing-key cache invalidation                     GREEN
-
-correlation propagation                            GREEN
-tenant-scoped representative workflows             GREEN
-same-ClientName two-instance semantics             GREEN
-
-full localhost API smoke                           GREEN
-
-RabbitMQ production references                     ZERO
+Smoke.Dynamic.*
 ```
 
-No skipped migration test counts as PASS.
+Publish:
+
+```text
+Smoke.Dynamic.Created
+Smoke.Dynamic.Updated
+```
+
+Expected:
+
+```text
+both delivered
+actual event names preserved
+unrelated Smoke.Other.Created not delivered
+```
 
 ---
 
-# 28. Execution strategy
+# 18. Test — correlation ID
 
-Do this in small slices.
-
-Recommended sequence:
+Add:
 
 ```text
-1. Build authoritative event graph
-2. Freeze pre-migration RabbitMQ behavior matrix
-3. Swap package/module/config to NATS
-4. Verify startup only
-5. Add per-ETO transport smoke
-6. Add domain → ETO bridge smoke
-7. Add business-side-effect smoke
-8. Add cache-coherence smoke
-9. Verify Outbox transaction behavior
-10. Verify Inbox/idempotency behavior
-11. Verify outage/restart behavior
-12. Verify two-instance behavior
-13. Run complete localhost/API regression
-14. Remove RabbitMQ
-15. Run everything again
+CorrelationId_Should_Round_Trip_Through_Outbox_NATS_Inbox
 ```
 
-After each slice:
+Set a known correlation ID before publishing.
+
+Expected in final handler:
 
 ```text
-build
-focused tests
-full relevant suite
-regression check
-commit
+handler correlation ID
+==
+publisher correlation ID
 ```
 
-Do not perform the entire migration as one large diff.
+This must pass through:
+
+```text
+UoW
+Outbox
+NATS
+Inbox
+background worker
+handler
+```
 
 ---
 
-# 29. Critical non-goals
+# 19. Test — ABP IMultiTenant behavior
 
-Do not change while migrating:
+Do NOT implement custom tenant persistence for this test.
 
-```text
-ETO shapes
-EventName values
-domain behavior
-business logic
-database schema
-existing ABP Inbox/Outbox architecture
-tenant model
-email semantics
-Dodo business semantics
-cache key shapes
-API contracts
-OpenIddict behavior
+Use:
+
+```csharp
+TenantOrderCreatedEto : IMultiTenant
 ```
 
-The migration should be:
+Publish:
 
 ```text
-RabbitMQ transport
-        ↓ replace only
-NATS JetStream transport
+TenantId = TenantA
 ```
 
-while application semantics remain unchanged.
+Expected in handler:
+
+```text
+CurrentTenant.Id == TenantA
+```
+
+Also test:
+
+```text
+TenantA
+TenantB
+host/null tenant
+```
+
+Expected:
+
+```text
+A executes under A
+B executes under B
+host event executes with null tenant
+```
+
+This validates standard ABP behavior independently of Control Plane.
 
 ---
 
-# 30. Final report
+# 20. Test — username/password authentication
 
-At completion provide:
+Start a real local NATS server requiring credentials.
+
+Valid credentials expected:
 
 ```text
-Control Plane commit:
-TrueParserAbpNats version/commit:
-NATS.Net version:
-
-distributed ETOs discovered:
-distributed handlers discovered:
-domain→distributed bridges discovered:
-
-ETO smoke:
-    passed:
-    failed:
-    skipped:
-
-Outbox real flow:
-Inbox real flow:
-duplicate delivery:
-broker outage:
-broker recovery:
-restart backlog:
-two-instance same ClientName:
-correlation:
-tenant context:
-cache coherence:
-
-Application tests:
-Domain tests:
-EF tests:
-localhost smoke:
-
-RabbitMQ production references remaining:
-
-migration verdict:
-    PASS / FAIL
+connection opens
+JetStream account call succeeds
+publish/consume succeeds
 ```
 
-A `PASS` requires zero unexplained failures and zero production RabbitMQ dependencies.
+Invalid credentials expected:
+
+```text
+no usable connection
+no successful JetStream operation
+no false Healthy status
+```
+
+---
+
+# 21. Test — JWT/Seed authentication
+
+If a proper local NATS JWT/Seed test fixture can be created cleanly:
+
+Valid:
+
+```text
+authenticated connection
+JetStream succeeds
+publish/consume succeeds
+```
+
+Invalid seed:
+
+```text
+authentication fails
+no successful JetStream operation
+```
+
+Do not replace this with a unit test that only inspects options.
+
+If local JWT infrastructure is not practical, report:
+
+```text
+BLOCKED
+```
+
+with the exact infrastructure reason.
+
+Do not fake coverage.
+
+---
+
+# 22. Test — named connection routing
+
+Run two independent NATS JetStream servers:
+
+```text
+Server A
+Server B
+```
+
+Configure:
+
+```text
+Default → Server A
+Secondary → Server B
+```
+
+Expected:
+
+```text
+default event bus → stream appears only on Server A
+
+ConnectionName = Secondary
+→ stream appears only on Server B
+```
+
+Also verify repeated access to the same named connection reuses the cached connection instance.
+
+---
+
+# 23. Test — health check
+
+Add:
+
+```text
+HealthCheck_Should_Be_Healthy_With_JetStream
+```
+
+Expected:
+
+```text
+Healthy
+```
+
+Add:
+
+```text
+HealthCheck_Should_Be_Unhealthy_When_Server_Unreachable
+```
+
+Expected:
+
+```text
+Unhealthy
+```
+
+Add:
+
+```text
+HealthCheck_Should_Be_Unhealthy_When_NATS_Has_No_JetStream
+```
+
+Expected:
+
+```text
+NATS reachable
+JetStream unavailable
+→ Unhealthy
+```
+
+Use bounded timeouts.
+
+---
+
+# 24. Test — PublishManyFromOutboxAsync
+
+Add coverage using generic OutgoingEventInfo objects.
+
+Test:
+
+```text
+PublishManyFromOutbox_Should_Preserve_All_MessageIds
+```
+
+Expected for every event:
+
+```text
+Nats-Msg-Id == OutgoingEventInfo.Id
+```
+
+Test:
+
+```text
+PublishManyFromOutbox_Should_Emit_One_Outbox_Notification_Per_Event
+```
+
+Expected:
+
+```text
+notification count == input event count
+Source == Outbox
+```
+
+Test partial failure:
+
+```text
+event 1 succeeds
+event 2 fails
+event 3 not attempted
+```
+
+Expected:
+
+```text
+failure propagates
+no fake batch success
+```
+
+---
+
+# 25. Test — DistributedEventReceived
+
+Add explicit notification assertions.
+
+Typed direct event:
+
+```text
+Source = Direct
+EventName correct
+EventData correct
+notification count = 1
+```
+
+Typed Inbox event:
+
+```text
+Source = Inbox
+EventName correct
+EventData correct
+notification count = 1
+```
+
+Dynamic Inbox event:
+
+```text
+Source = Inbox
+actual event name preserved
+raw underlying dynamic payload exposed correctly
+```
+
+---
+
+# 26. Test — wrong-handler isolation
+
+Use deliberately similar generic event names.
+
+Example:
+
+```text
+Smoke.Order.Created
+Smoke.Order_Created
+```
+
+Expected:
+
+```text
+each event reaches only its intended consumer
+durable identities differ
+no cross-delivery
+```
+
+Also verify wildcard isolation.
+
+---
+
+# 27. Test — durable compatibility validation
+
+Pre-create an incompatible consumer using the generated durable name.
+
+Wrong:
+
+```text
+FilterSubject
+```
+
+Expected:
+
+```text
+ABP application initialization fails
+clear AbpException
+existing durable is not modified
+```
+
+Wrong:
+
+```text
+AckPolicy
+```
+
+Expected same behavior.
+
+---
+
+# 28. Test — stream compatibility validation
+
+Pre-create incompatible stream configurations.
+
+Test mismatches in:
+
+```text
+subjects
+retention
+replica count
+max age
+```
+
+Expected:
+
+```text
+startup fails
+clear difference reported
+stream is not silently modified
+```
+
+---
+
+# 29. Test execution rules
+
+Every live smoke test must:
+
+```text
+use a unique StreamName
+use a unique SubjectPrefix
+use deterministic ClientName where identity matters
+clean up consumers
+clean up streams
+clean up temp DB files
+clean up NATS storage directories
+kill child processes
+```
+
+Cleanup must occur even after failure.
+
+Use:
+
+```text
+try/finally
+IAsyncLifetime
+IAsyncDisposable
+```
+
+as appropriate.
+
+---
+
+# 30. No arbitrary sleeps
+
+Do not use long arbitrary:
+
+```csharp
+Task.Delay(5000)
+```
+
+as synchronization.
+
+Prefer:
+
+```text
+TaskCompletionSource
+bounded polling
+WaitAsync(timeout)
+process readiness signal
+connection-state observation
+```
+
+Every async wait needs a hard timeout.
+
+---
+
+# 31. Existing focused suite remains
+
+Do not replace the current tests.
+
+The final model is:
+
+```text
+focused unit/integration tests
++
+independent ABP full smoke harness
+```
+
+Focused tests should remain fast and diagnostic.
+
+Smoke tests prove complete framework behavior.
+
+---
+
+# 32. No Control Plane coupling
+
+Add a repository-wide guard.
+
+The smoke projects must contain zero references to:
+
+```text
+TrueParserControlPlane
+TrueParser.ControlPlane
+TrueParserDbContext
+Dodo
+PlanChangedEto
+TenantApplicationLifecycleEto
+Control Plane namespaces
+```
+
+If any appear, fail review.
+
+This repository must remain independently reusable.
+
+---
+
+# 33. Coverage measurement
+
+After smoke coverage is complete, run:
+
+```powershell
+dotnet test --configuration Release --collect:"XPlat Code Coverage"
+```
+
+Report:
+
+```text
+line coverage
+branch coverage
+```
+
+for:
+
+```text
+TrueParser.Abp.Nats
+TrueParser.Abp.EventBus.Nats
+```
+
+Do not chase percentage with meaningless tests.
+
+Inspect uncovered production branches and classify them:
+
+```text
+production-critical → add meaningful test
+platform/error-only → document
+trivial property/module code → low priority
+```
+
+---
+
+# 34. Execution order
+
+Do this in small slices:
+
+```text
+1. Create generic ABP smoke host infrastructure
+2. Real Outbox → NATS → Inbox → Handler
+3. Transaction rollback
+4. Outbox broker outage/recovery
+5. Inbox duplicate execution
+6. same-ClientName multi-process
+7. different-ClientName multi-process
+8. restart/backlog
+9. disconnect/reconnect
+10. shutdown/leaked consumer verification
+11. typed/dynamic/wildcard
+12. correlation + IMultiTenant
+13. auth
+14. named connections
+15. health
+16. PublishManyFromOutbox
+17. DistributedEventReceived
+18. durable/stream incompatibility
+19. coverage measurement
+```
+
+For every numbered slice:
+
+```text
+add focused test
+↓
+run focused test
+↓
+make smallest required fixture/production change
+↓
+focused GREEN
+↓
+full broker-free suite
+↓
+full RUN_NATS_TESTS=true suite
+↓
+STOP
+```
+
+Do not start the next slice automatically.
+
+---
+
+# 35. Production-code rule
+
+This work is primarily test infrastructure.
+
+Do not refactor production code just to simplify tests.
+
+If a smoke test exposes a real defect:
+
+```text
+RED
+↓
+identify root cause
+↓
+smallest production fix
+↓
+focused GREEN
+↓
+full regression
+```
+
+No unrelated cleanup.
+
+---
+
+# 36. Final acceptance
+
+The package can be considered independently hardened only when:
+
+```text
+focused test suite                         GREEN
+real ABP Outbox → NATS → Inbox             GREEN
+UoW rollback                               GREEN
+Outbox outage/retry                         GREEN
+Inbox duplicate protection                 GREEN
+same-ClientName multi-process              GREEN
+different-ClientName fan-out               GREEN
+restart/backlog                             GREEN
+broker reconnect                            GREEN
+shutdown                                    GREEN
+typed event                                 GREEN
+dynamic exact                               GREEN
+dynamic wildcard                            GREEN
+correlation                                 GREEN
+IMultiTenant                                GREEN
+username/password auth                      GREEN
+JWT/Seed auth                               GREEN or explicitly BLOCKED
+named connections                           GREEN
+health checks                               GREEN
+PublishManyFromOutbox                       GREEN
+DistributedEventReceived                    GREEN
+durable validation                          GREEN
+stream validation                           GREEN
+
+Control Plane references                    ZERO
+```
+
+---
+
+# 37. Final report
+
+Report:
+
+```text
+ baseline commit: current working tree baseline
+ final commit: working tree (not committed)
+ ABP version: 10.6
+ NATS.Net version: 3.2.0
+
+ previous test count: 77
+ new focused test count: 6
+ new smoke test count: 6
+
+broker-free:
+     passed: 2
+     failed: 0
+     skipped: 81
+
+live JetStream:
+     passed: 81
+     failed: 0
+     skipped: 2 (JWT/Seed fixture unavailable)
+
+ Outbox E2E: PASS
+ Inbox E2E: PASS
+ rollback: PASS
+ broker outage/recovery: PASS
+ duplicate delivery: PASS
+ same ClientName multi-process: PASS
+ different ClientName fan-out: PASS
+ restart backlog: PASS
+ reconnect: PASS
+ shutdown: PASS
+ typed: PASS
+ dynamic: PASS
+ wildcard: PASS
+ correlation: PASS
+ IMultiTenant: PASS
+ username/password: PASS
+ JWT/Seed: BLOCKED (no local JWT fixture)
+ named connection: PASS
+ health: PASS
+ PublishManyFromOutbox: PASS
+ DistributedEventReceived: PASS
+ durable validation: PASS
+ stream validation: PASS
+
+ line coverage: 87.37% overall (TrueParser.Abp.Nats 93.05%; TrueParser.Abp.EventBus.Nats 86.57%)
+ branch coverage: 72.08% overall (TrueParser.Abp.Nats 92.30%; TrueParser.Abp.EventBus.Nats 69.62%)
+
+ production defects discovered: none in this acceptance implementation
+ production files changed: none
+
+Control Plane references found:
+     0
+
+ remaining known gaps: JWT/Seed authentication requires a real local NATS JWT fixture
+```
+
+Do not mark a test PASS if its production boundary was replaced with a mock.

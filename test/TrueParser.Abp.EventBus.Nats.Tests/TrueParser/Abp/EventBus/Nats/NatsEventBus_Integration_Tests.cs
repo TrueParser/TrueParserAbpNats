@@ -720,6 +720,60 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
     }
 
     [NatsFact]
+    public async Task String_Publish_Overload_Should_Dispatch_A_Registered_Typed_Event()
+    {
+        var expectedMessage = $"StringPublish.Typed.{Guid.NewGuid():N}";
+        var received = new TaskCompletionSource<TestEventData>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var subscription = _distributedEventBus.Subscribe<TestEventData>(data =>
+        {
+            if (data.Message == expectedMessage)
+            {
+                received.TrySetResult(data);
+            }
+
+            return Task.CompletedTask;
+        });
+
+        for (var attempt = 0; attempt < 20 && !received.Task.IsCompleted; attempt++)
+        {
+            await _distributedEventBus.PublishAsync(
+                "TestEvent",
+                new TestEventData { Message = expectedMessage },
+                onUnitOfWorkComplete: false);
+            await Task.Delay(100);
+        }
+
+        (await received.Task.WaitAsync(TimeSpan.FromSeconds(10))).Message.ShouldBe(expectedMessage);
+    }
+
+    [NatsFact]
+    public async Task String_Publish_Overload_Should_Dispatch_An_Unknown_Dynamic_Event()
+    {
+        var eventName = $"StringPublish.Dynamic.{Guid.NewGuid():N}";
+        var received = new TaskCompletionSource<DynamicEventData>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var subscription = _distributedEventBus.Subscribe(
+            eventName,
+            new RetainedEventHandler(data => received.TrySetResult(data)));
+
+        for (var attempt = 0; attempt < 20 && !received.Task.IsCompleted; attempt++)
+        {
+            await _distributedEventBus.PublishAsync(
+                eventName,
+                new { Value = 13 },
+                onUnitOfWorkComplete: false);
+            await Task.Delay(100);
+        }
+
+        var eventData = await received.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        eventData.EventName.ShouldBe(eventName);
+        eventData.Data.ShouldNotBeNull();
+    }
+
+    [NatsFact]
     public async Task Outbox_Publish_Should_Trigger_DistributedEventSent_Exactly_Once_From_Outbox()
     {
         var eventName = $"NotificationParity.Outbox.{Guid.NewGuid():N}";

@@ -12,7 +12,7 @@ namespace TrueParser.Abp.EventBus.Nats;
 
 public sealed class NatsConnectionIntegrationTests
 {
-    [NatsFact]
+    [NatsEnvironmentFact("NATS_AUTH_TEST_URL", "NATS_AUTH_TEST_USERNAME", "NATS_AUTH_TEST_PASSWORD")]
     public async Task UsernamePassword_Authentication_With_Valid_Credentials_Should_Connect()
     {
         var options = new AbpNatsOptions
@@ -25,7 +25,7 @@ public sealed class NatsConnectionIntegrationTests
         await VerifyJetStreamPublishAndConsumeAsync(options, "UsernamePassword.Valid");
     }
 
-    [NatsFact]
+    [NatsEnvironmentFact("NATS_AUTH_TEST_URL", "NATS_AUTH_TEST_USERNAME", "NATS_AUTH_TEST_PASSWORD")]
     public async Task UsernamePassword_Authentication_With_Invalid_Credentials_Should_Fail()
     {
         var options = new AbpNatsOptions
@@ -44,7 +44,7 @@ public sealed class NatsConnectionIntegrationTests
         });
     }
 
-    [NatsFact]
+    [NatsEnvironmentFact("NATS_JWT_TEST_URL", "NATS_JWT_TEST_JWT", "NATS_JWT_TEST_SEED")]
     public async Task JwtSeed_Authentication_With_Valid_Test_Credentials_Should_Connect()
     {
         var options = new AbpNatsOptions
@@ -57,7 +57,7 @@ public sealed class NatsConnectionIntegrationTests
         await VerifyJetStreamPublishAndConsumeAsync(options, "JwtSeed.Valid");
     }
 
-    [NatsFact]
+    [NatsEnvironmentFact("NATS_JWT_TEST_URL", "NATS_JWT_TEST_JWT", "NATS_JWT_TEST_SEED")]
     public async Task JwtSeed_Authentication_With_Invalid_Seed_Should_Fail()
     {
         var options = new AbpNatsOptions
@@ -76,7 +76,7 @@ public sealed class NatsConnectionIntegrationTests
         });
     }
 
-    [NatsFact]
+    [NatsEnvironmentFact("NATS_TEST_URL", "NATS_SECONDARY_TEST_URL")]
     public async Task Default_Connection_Should_Resolve_Default_Server()
     {
         var streamName = $"ConnectionResolution_Default_{Guid.NewGuid():N}";
@@ -104,7 +104,7 @@ public sealed class NatsConnectionIntegrationTests
         }
     }
 
-    [NatsFact]
+    [NatsEnvironmentFact("NATS_TEST_URL", "NATS_SECONDARY_TEST_URL")]
     public async Task Named_Connection_Should_Resolve_Configured_Server()
     {
         var streamName = $"ConnectionResolution_Secondary_{Guid.NewGuid():N}";
@@ -132,7 +132,7 @@ public sealed class NatsConnectionIntegrationTests
         }
     }
 
-    [NatsFact]
+    [NatsEnvironmentFact("NATS_TEST_URL", "NATS_SECONDARY_TEST_URL")]
     public async Task Multiple_Requests_For_Same_ConnectionName_Should_Reuse_Connection()
     {
         await using var pool = new AbpNatsConnectionPool(Options.Create(CreateNamedConnectionOptions()));

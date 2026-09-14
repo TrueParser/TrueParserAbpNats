@@ -75,6 +75,76 @@ public sealed class NatsMultiProcessIntegrationTests : NatsEventBusTestBase
         }
     }
 
+    [NatsFact]
+    public async Task Two_Processes_With_Different_ClientNames_Should_Each_Receive_Full_Event_Set()
+    {
+        var url = Environment.GetEnvironmentVariable("NATS_TEST_URL") ?? "nats://localhost:4222";
+        var streamName = $"MultiProcessFanOut_{Guid.NewGuid():N}";
+        var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.MultiProcessFanOut.Events";
+        var eventName = "Billing.InvoiceIssued";
+        var resultDirectory = Path.Combine(Path.GetTempPath(), $"trueparser-fanout-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(resultDirectory);
+
+        await using var processA = await ReplicaProcess.StartAsync(
+            url, streamName, subjectPrefix, "Billing", eventName,
+            Path.Combine(resultDirectory, "billing.txt"));
+        await using var processB = await ReplicaProcess.StartAsync(
+            url, streamName, subjectPrefix, "Notifications", eventName,
+            Path.Combine(resultDirectory, "notifications.txt"));
+
+        using var publisher = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = streamName,
+                SubjectPrefix = subjectPrefix,
+                ClientName = "CoverageFanOutPublisher",
+                ConnectionName = GetRequiredService<IOptions<NatsDistributedEventBusOptions>>().Value.ConnectionName
+            }));
+        await publisher.InitializeAsync();
+
+        var expectedIds = Enumerable.Range(1, 50)
+            .Select(index => $"fanout-{index:D2}-{Guid.NewGuid():N}")
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var id in expectedIds)
+        {
+            await publisher.PublishAsync(
+                typeof(DynamicEventData),
+                new DynamicEventData(eventName, new { Id = id }),
+                onUnitOfWorkComplete: false,
+                useOutbox: false);
+        }
+
+        var billingFile = Path.Combine(resultDirectory, "billing.txt");
+        var notificationsFile = Path.Combine(resultDirectory, "notifications.txt");
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        while (DateTime.UtcNow < deadline &&
+               (ReadFileIds(billingFile).Count < expectedIds.Count ||
+                ReadFileIds(notificationsFile).Count < expectedIds.Count))
+        {
+            await Task.Delay(100);
+        }
+
+        var billingIds = ReadFileIds(billingFile);
+        var notificationIds = ReadFileIds(notificationsFile);
+        billingIds.Count.ShouldBe(expectedIds.Count);
+        notificationIds.Count.ShouldBe(expectedIds.Count);
+        billingIds.SetEquals(expectedIds).ShouldBeTrue();
+        notificationIds.SetEquals(expectedIds).ShouldBeTrue();
+
+        await processA.StopAsync();
+        await processB.StopAsync();
+
+        try
+        {
+            Directory.Delete(resultDirectory, recursive: true);
+        }
+        catch (IOException)
+        {
+            // The temporary result files are disposable test artifacts.
+        }
+    }
+
     private static HashSet<string> ReadIds(string directory)
     {
         var ids = new HashSet<string>(StringComparer.Ordinal);
@@ -86,6 +156,25 @@ public sealed class NatsMultiProcessIntegrationTests : NatsEventBusTestBase
                 {
                     ids.Add(line.Trim());
                 }
+            }
+        }
+
+        return ids;
+    }
+
+    private static HashSet<string> ReadFileIds(string file)
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        if (!File.Exists(file))
+        {
+            return ids;
+        }
+
+        foreach (var line in File.ReadLines(file))
+        {
+            if (!string.IsNullOrWhiteSpace(line))
+            {
+                ids.Add(line.Trim());
             }
         }
 
