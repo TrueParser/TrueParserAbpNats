@@ -12,7 +12,7 @@ jobs:
       RUN_NATS_TESTS: "false"
 
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout
@@ -59,3 +59,16 @@ jobs:
           --source https://api.nuget.org/v3/index.json
           --api-key ${{ secrets.NUGET_API_KEY }}
           --skip-duplicate
+
+      - name: Create GitHub release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "GitHub release $GITHUB_REF_NAME already exists; leaving it unchanged."
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes \
+              --verify-tag
+          fi
