@@ -299,7 +299,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                     {
                         try
                         {
-                            await ProcessMessageAsync(msg);
+                            await ProcessMessageAsync(msg, eventName);
                             await msg.AckAsync();
                         }
                         catch (Exception ex)
@@ -430,11 +430,14 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
     private void StopConsumerIfNoHandlers(string eventName, Type? eventType = null)
     {
-        var hasHandlers = eventType != null
-            ? HandlerFactories.TryGetValue(eventType, out var typedFactories) && typedFactories.Locking(factories => factories.Any())
-            : DynamicHandlerFactories.TryGetValue(eventName, out var dynamicFactories) && dynamicFactories.Locking(factories => factories.Any());
+        var type = eventType ?? EventTypes.GetOrDefault(eventName);
+        var hasTypedHandlers = type != null
+            && HandlerFactories.TryGetValue(type, out var typedFactories)
+            && typedFactories.Locking(factories => factories.Any());
+        var hasDynamicHandlers = DynamicHandlerFactories.TryGetValue(eventName, out var dynamicFactories)
+            && dynamicFactories.Locking(factories => factories.Any());
 
-        if (!hasHandlers)
+        if (!hasTypedHandlers && !hasDynamicHandlers)
         {
             StopConsumer(eventName);
         }
@@ -598,7 +601,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         return clientName;
     }
 
-    private async Task ProcessMessageAsync(INatsJSMsg<byte[]> msg)
+    private async Task ProcessMessageAsync(INatsJSMsg<byte[]> msg, string consumerPattern)
     {
         if (msg.Data == null) return;
 
@@ -655,10 +658,9 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                     });
 
                     var exceptions = new List<Exception>();
-                    var dynamicFactories = DynamicHandlerFactories
-                        .Where(hf => MatchesEventName(hf.Key, eventName))
-                        .SelectMany(hf => hf.Value.Locking(factories => factories.ToList()))
-                        .ToList();
+                    var dynamicFactories = DynamicHandlerFactories.TryGetValue(consumerPattern, out var factories)
+                        ? factories.Locking(items => items.ToList())
+                        : [];
 
                     foreach (var factory in dynamicFactories)
                     {
@@ -845,7 +847,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
     {
         var eventName = EventNameAttribute.GetNameOrDefault(eventType);
         GetOrCreateHandlerFactories(eventType).Locking(factories => factories.Clear());
-        StopConsumer(eventName);
+        StopConsumerIfNoHandlers(eventName, eventType);
     }
 
     public override void Unsubscribe(string eventName, IEventHandlerFactory factory)
@@ -867,7 +869,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
     public override void UnsubscribeAll(string eventName)
     {
         GetOrCreateDynamicHandlerFactories(eventName).Locking(factories => factories.Clear());
-        StopConsumer(eventName);
+        StopConsumerIfNoHandlers(eventName);
     }
 
     // ── Handler factory lookup ────────────────────────────────────────────────

@@ -124,6 +124,95 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
     }
 
     [NatsFact]
+    public async Task Overlapping_Dynamic_Subscriptions_Should_Invoke_Each_Handler_Once()
+    {
+        var eventPrefix = $"WildcardOverlap.{Guid.NewGuid():N}";
+        var eventName = $"{eventPrefix}.Created";
+        var wildcardInvocations = 0;
+        var exactInvocations = 0;
+        var bothHandlersReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var eventBus = CreateCapturingEventBus();
+        using var wildcardSubscription = eventBus.Subscribe(
+            $"{eventPrefix}.*",
+            new RetainedEventHandler(_ =>
+            {
+                Interlocked.Increment(ref wildcardInvocations);
+                if (Volatile.Read(ref exactInvocations) > 0)
+                {
+                    bothHandlersReceived.TrySetResult();
+                }
+            }));
+        using var exactSubscription = eventBus.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ =>
+            {
+                Interlocked.Increment(ref exactInvocations);
+                if (Volatile.Read(ref wildcardInvocations) > 0)
+                {
+                    bothHandlersReceived.TrySetResult();
+                }
+            }));
+
+        await Task.Delay(1000);
+        await eventBus.PublishAsync(
+            typeof(DynamicEventData),
+            new DynamicEventData(eventName, new { Value = 1 }),
+            onUnitOfWorkComplete: false,
+            useOutbox: false);
+
+        await bothHandlersReceived.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.Delay(500);
+
+        Volatile.Read(ref wildcardInvocations).ShouldBe(1);
+        Volatile.Read(ref exactInvocations).ShouldBe(1);
+    }
+
+    [NatsFact]
+    public async Task Unsubscribing_Typed_Handler_Should_Keep_Exact_Dynamic_Consumer_Alive()
+    {
+        var dynamicReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var eventBus = CreateCapturingEventBus();
+        using var dynamicSubscription = eventBus.Subscribe(
+            "TestEvent",
+            new RetainedEventHandler(_ => dynamicReceived.TrySetResult()));
+        var typedSubscription = eventBus.Subscribe(new TestEventHandler(_ => { }));
+
+        await Task.Delay(1000);
+        typedSubscription.Dispose();
+
+        await eventBus.PublishAsync(
+            new TestEventData { Message = "dynamic-after-typed-unsubscribe" },
+            onUnitOfWorkComplete: false,
+            useOutbox: false);
+
+        await dynamicReceived.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    [NatsFact]
+    public async Task Unsubscribing_Dynamic_Handler_Should_Keep_Typed_Consumer_Alive()
+    {
+        var typedReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var eventBus = CreateCapturingEventBus();
+        using var typedSubscription = eventBus.Subscribe(new TestEventHandler(_ => typedReceived.TrySetResult()));
+        var dynamicSubscription = eventBus.Subscribe(
+            "TestEvent",
+            new RetainedEventHandler(_ => { }));
+
+        await Task.Delay(1000);
+        dynamicSubscription.Dispose();
+
+        await eventBus.PublishAsync(
+            new TestEventData { Message = "typed-after-dynamic-unsubscribe" },
+            onUnitOfWorkComplete: false,
+            useOutbox: false);
+
+        await typedReceived.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    [NatsFact]
     public async Task Dynamic_Event_Should_Be_Processed_Through_Abp_Inbox()
     {
         var eventName = $"DynamicInbox.Exact.{Guid.NewGuid():N}";
