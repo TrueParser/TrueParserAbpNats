@@ -213,6 +213,37 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
     }
 
     [NatsFact]
+    public async Task Typed_Event_And_Wildcard_Dynamic_Subscription_Should_Each_Run_Once()
+    {
+        var typedInvocations = 0;
+        var wildcardInvocations = 0;
+        var typedReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var eventBus = CreateCapturingEventBus();
+        using var typedSubscription = eventBus.Subscribe(
+            new OrderCreatedEventHandler(_ =>
+            {
+                Interlocked.Increment(ref typedInvocations);
+                typedReceived.TrySetResult();
+            }));
+        using var wildcardSubscription = eventBus.Subscribe(
+            "Order.*",
+            new RetainedEventHandler(_ => Interlocked.Increment(ref wildcardInvocations)));
+
+        await Task.Delay(1000);
+        await eventBus.PublishAsync(
+            new OrderCreatedEventData { OrderId = Guid.NewGuid() },
+            onUnitOfWorkComplete: false,
+            useOutbox: false);
+
+        await typedReceived.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.Delay(500);
+
+        $"typed={Volatile.Read(ref typedInvocations)}; wildcard={Volatile.Read(ref wildcardInvocations)}"
+            .ShouldBe("typed=1; wildcard=1");
+    }
+
+    [NatsFact]
     public async Task Dynamic_Event_Should_Be_Processed_Through_Abp_Inbox()
     {
         var eventName = $"DynamicInbox.Exact.{Guid.NewGuid():N}";
@@ -1739,6 +1770,12 @@ public class TestEventData
     public string? Message { get; set; }
 }
 
+[EventName("Order.Created")]
+public class OrderCreatedEventData
+{
+    public Guid OrderId { get; set; }
+}
+
 public class WildcardTestHandler : IDistributedEventHandler<DynamicEventData>
 {
     private readonly Action<DynamicEventData> _onReceived;
@@ -1772,6 +1809,19 @@ public class TestEventHandler : IDistributedEventHandler<TestEventData>
     public TestEventHandler(Action<TestEventData> onReceived) => _onReceived = onReceived;
 
     public Task HandleEventAsync(TestEventData eventData)
+    {
+        _onReceived(eventData);
+        return Task.CompletedTask;
+    }
+}
+
+public class OrderCreatedEventHandler : IDistributedEventHandler<OrderCreatedEventData>
+{
+    private readonly Action<OrderCreatedEventData> _onReceived;
+
+    public OrderCreatedEventHandler(Action<OrderCreatedEventData> onReceived) => _onReceived = onReceived;
+
+    public Task HandleEventAsync(OrderCreatedEventData eventData)
     {
         _onReceived(eventData);
         return Task.CompletedTask;

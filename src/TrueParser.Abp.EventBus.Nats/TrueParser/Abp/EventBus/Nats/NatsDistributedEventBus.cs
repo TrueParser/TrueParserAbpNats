@@ -616,7 +616,8 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
         using (CurrentTenant.Change(tenantId))
         {
-            var eventType = EventTypes.GetOrDefault(eventName);
+            var isWildcardConsumer = consumerPattern.Contains('*') || consumerPattern.Contains('>');
+            var eventType = isWildcardConsumer ? null : EventTypes.GetOrDefault(eventName);
 
             if (eventType != null)
             {
