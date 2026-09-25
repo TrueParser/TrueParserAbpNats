@@ -13,13 +13,15 @@ split across Windows and WSL:
   `localhost:6379` under the same port-forwarding condition.
 
 The NATS integration tests use a primary JetStream server, a second independent
-server, and an authenticated server. Start these in separate WSL terminals when
-running every environment-gated test:
+server, and an authenticated server. Each server must use a different JetStream
+store directory; otherwise they can recover the same stream state and interfere
+with each other. Start these in separate WSL terminals when running every
+environment-gated test:
 
 ```bash
-nats-server -js -p 4222
-nats-server -js -p 4223
-nats-server -js -p 4224 --user testuser --pass testpass
+nats-server -js -p 4222 -sd /tmp/nats-primary
+nats-server -js -p 4223 -sd /tmp/nats-secondary
+nats-server -js -p 4224 --user testuser --pass testpass -sd /tmp/nats-auth
 ```
 
 The live test project uses `RUN_NATS_TESTS=true`. EF-backed event-box tests

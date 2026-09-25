@@ -11,6 +11,7 @@ using NATS.Net;
 using NSubstitute;
 using Shouldly;
 using TrueParser.Abp.Nats;
+using Volo.Abp.DependencyInjection;
 using Volo.Abp.EventBus;
 using Volo.Abp.EventBus.Distributed;
 using Volo.Abp.EventBus.Local;
@@ -107,6 +108,23 @@ public class NatsEventBusLifecycle_Tests
     }
 
     [Fact]
+    public async Task Immediate_resubscribe_after_unsubscribe_should_start_a_successor_consumer()
+    {
+        using var eventBus = new TrackingNatsDistributedEventBus();
+        var firstSubscription = eventBus.Subscribe<LifecycleEvent>(_ => Task.CompletedTask);
+        await eventBus.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        firstSubscription.Dispose();
+        var secondSubscription = eventBus.Subscribe<LifecycleEvent>(_ => Task.CompletedTask);
+
+        eventBus.ReleaseConsumers();
+        await eventBus.SecondStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        eventBus.StartCount.ShouldBe(2);
+
+        secondSubscription.Dispose();
+    }
+
+    [Fact]
     public async Task Concurrent_context_requests_should_share_the_cached_context()
     {
         var connection = new NatsConnection(NatsOpts.Default);
@@ -128,6 +146,7 @@ public sealed class LifecycleDynamicHandler : IDistributedEventHandler<DynamicEv
     public Task HandleEventAsync(DynamicEventData eventData) => Task.CompletedTask;
 }
 
+[DisableConventionalRegistration]
 internal sealed class TrackingNatsDistributedEventBus : NatsDistributedEventBus
 {
     private readonly TaskCompletionSource _releaseConsumers = new(TaskCreationOptions.RunContinuationsAsynchronously);

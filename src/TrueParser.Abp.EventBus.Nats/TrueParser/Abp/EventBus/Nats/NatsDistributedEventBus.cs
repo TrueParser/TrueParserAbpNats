@@ -49,6 +49,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
     private readonly CancellationTokenSource _shutdownCts = new();
     private readonly object _consumerSync = new();
     private readonly ConcurrentDictionary<string, Task> _consumerTasks = new();
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _consumerTaskCancellationSources = new();
     private int _disposed;
 
     public NatsDistributedEventBus(
@@ -399,6 +400,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
             ConsumerCancellationSources.Clear();
             ConsumerStartupSignals.Clear();
+            _consumerTaskCancellationSources.Clear();
             _shutdownCts.Dispose();
             _streamSemaphore.Dispose();
         }
@@ -432,7 +434,10 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
             var consumerCancellationSource = GetOrCreateConsumerCancellationSource(eventName);
             _consumerTasks.TryGetValue(eventName, out var previousTask);
 
-            if (previousTask is { IsCompleted: false } && !consumerCancellationSource.IsCancellationRequested)
+            if (previousTask is { IsCompleted: false }
+                && _consumerTaskCancellationSources.TryGetValue(eventName, out var previousCancellationSource)
+                && ReferenceEquals(previousCancellationSource, consumerCancellationSource)
+                && !consumerCancellationSource.IsCancellationRequested)
             {
                 return;
             }
@@ -490,6 +495,12 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                             && ReferenceEquals(currentTask, consumerTask))
                         {
                             _consumerTasks.TryRemove(eventName, out _);
+
+                            if (_consumerTaskCancellationSources.TryGetValue(eventName, out var currentTaskCancellationSource)
+                                && ReferenceEquals(currentTaskCancellationSource, consumerCancellationSource))
+                            {
+                                _consumerTaskCancellationSources.TryRemove(eventName, out _);
+                            }
                         }
                     }
 
@@ -498,6 +509,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
             });
 
             _consumerTasks[eventName] = consumerTask;
+            _consumerTaskCancellationSources[eventName] = consumerCancellationSource;
         }
     }
 
@@ -824,13 +836,6 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
                 using (CorrelationIdProvider.Change(correlationId))
                 {
-                    await TriggerDistributedEventReceivedAsync(new DistributedEventReceived
-                    {
-                        Source = DistributedEventSource.Direct,
-                        EventName = eventName,
-                        EventData = eventData
-                    });
-
                     await TriggerHandlersDirectAsync(eventType, eventData);
                 }
             }

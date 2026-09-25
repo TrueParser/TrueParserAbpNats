@@ -11,7 +11,9 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NATS.Client.JetStream;
 using NATS.Client.JetStream.Models;
+using NSubstitute;
 using TrueParser.Abp.Nats;
+using Volo.Abp.DependencyInjection;
 using Volo.Abp.EventBus;
 using Volo.Abp.EventBus.Distributed;
 using Volo.Abp.EventBus.Local;
@@ -726,43 +728,87 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
         received.EventData.ShouldNotBeOfType<DynamicEventData>();
     }
 
-    [NatsFact]
+    [Fact]
     public async Task Typed_Direct_Event_Should_Emit_One_DistributedEventReceived_From_Direct()
     {
+        var notificationCount = 0;
         var handlerInvocations = 0;
-        var notification = new TaskCompletionSource<DistributedEventReceived>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
         var localEventBus = GetRequiredService<ILocalEventBus>();
+        var serializer = GetRequiredService<INatsEventSerializer>();
 
         using var notificationSubscription = localEventBus.Subscribe<DistributedEventReceived>(eventData =>
         {
             if (eventData.EventName == "TestEvent")
             {
-                notification.TrySetResult(eventData);
+                Interlocked.Increment(ref notificationCount);
             }
 
             return Task.CompletedTask;
         });
-        using var handlerSubscription = _distributedEventBus.Subscribe<TestEventData>(_ =>
+        using var eventBus = CreateCapturingEventBus();
+        eventBus.Dispose();
+        using var handlerSubscription = eventBus.Subscribe<TestEventData>(_ =>
         {
             Interlocked.Increment(ref handlerInvocations);
+            return Task.CompletedTask;
+        });
+        var message = Substitute.For<INatsJSMsg<byte[]>>();
+        message.Subject.Returns(eventBus.GetSubjectNameForTest("TestEvent"));
+        message.Data.Returns(serializer.Serialize(new TestEventData { Message = "TypedDirect" }));
+
+        await eventBus.ProcessMessageForTestAsync(message, "TestEvent");
+
+        Volatile.Read(ref handlerInvocations).ShouldBe(1);
+        Volatile.Read(ref notificationCount).ShouldBe(1);
+    }
+
+    [NatsFact]
+    public async Task Typed_Direct_Event_Over_Live_Nats_Should_Emit_One_DistributedEventReceived()
+    {
+        var notificationCount = 0;
+        var handlerInvocations = 0;
+        var notification = new TaskCompletionSource<DistributedEventReceived>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var handlerCompleted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var eventData = new TestEventData { Message = $"TypedDirect.{Guid.NewGuid():N}" };
+        var localEventBus = GetRequiredService<ILocalEventBus>();
+
+        using var notificationSubscription = localEventBus.Subscribe<DistributedEventReceived>(received =>
+        {
+            if (received.EventName == "TestEvent")
+            {
+                Interlocked.Increment(ref notificationCount);
+                notification.TrySetResult(received);
+            }
+
+            return Task.CompletedTask;
+        });
+        using var handlerSubscription = _distributedEventBus.Subscribe<TestEventData>(received =>
+        {
+            if (received.Message == eventData.Message)
+            {
+                Interlocked.Increment(ref handlerInvocations);
+                handlerCompleted.TrySetResult();
+            }
+
             return Task.CompletedTask;
         });
 
         for (var attempt = 0; attempt < 20 && !notification.Task.IsCompleted; attempt++)
         {
-            await _distributedEventBus.PublishAsync(
-                new TestEventData { Message = $"TypedDirect.{Guid.NewGuid():N}" },
-                onUnitOfWorkComplete: false,
-                useOutbox: false);
+            await _distributedEventBus.PublishAsync(eventData, onUnitOfWorkComplete: false, useOutbox: false);
             await Task.Delay(100);
         }
 
-        var received = await notification.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        received.Source.ShouldBe(DistributedEventSource.Direct);
-        received.EventName.ShouldBe("TestEvent");
-        received.EventData.ShouldBeOfType<TestEventData>();
+        var receivedEvent = await notification.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await handlerCompleted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        receivedEvent.Source.ShouldBe(DistributedEventSource.Direct);
+        receivedEvent.EventName.ShouldBe("TestEvent");
+        receivedEvent.EventData.ShouldBeOfType<TestEventData>();
         Volatile.Read(ref handlerInvocations).ShouldBe(1);
+        Volatile.Read(ref notificationCount).ShouldBe(1);
     }
 
     [NatsFact]
@@ -2001,6 +2047,7 @@ public class OrderCreatedEventHandler : IDistributedEventHandler<OrderCreatedEve
     }
 }
 
+[DisableConventionalRegistration]
 public class CapturingNatsDistributedEventBus : NatsDistributedEventBus
 {
     public string? LastMessageId { get; private set; }
@@ -2080,8 +2127,23 @@ public class CapturingNatsDistributedEventBus : NatsDistributedEventBus
             .GetMethod("GetConsumerName", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
             .Invoke(this, [eventName])!;
     }
+
+    public string GetSubjectNameForTest(string eventName)
+    {
+        return (string)typeof(NatsDistributedEventBus)
+            .GetMethod("GetSubjectName", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(this, [eventName])!;
+    }
+
+    public Task ProcessMessageForTestAsync(INatsJSMsg<byte[]> message, string consumerPattern)
+    {
+        return (Task)typeof(NatsDistributedEventBus)
+            .GetMethod("ProcessMessageAsync", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(this, [message, consumerPattern])!;
+    }
 }
 
+[DisableConventionalRegistration]
 public sealed class FaultInjectingNatsDistributedEventBus : CapturingNatsDistributedEventBus
 {
     public FaultInjectingNatsDistributedEventBus(

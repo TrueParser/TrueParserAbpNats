@@ -10,6 +10,7 @@ using NATS.Client.JetStream.Models;
 using NSubstitute;
 using Shouldly;
 using TrueParser.Abp.Nats;
+using Volo.Abp.DependencyInjection;
 using Volo.Abp.EventBus;
 using Volo.Abp.EventBus.Distributed;
 using Volo.Abp.EventBus.Local;
@@ -132,6 +133,7 @@ public class NatsDistributedEventBusPublishAck_Tests
             DateTime.UtcNow);
     }
 
+    [DisableConventionalRegistration]
     private sealed class PublishAckEventBus : NatsDistributedEventBus
     {
         public PublishAckEventBus(IJetStreamContextAccessor accessor, INatsEventSerializer serializer)
