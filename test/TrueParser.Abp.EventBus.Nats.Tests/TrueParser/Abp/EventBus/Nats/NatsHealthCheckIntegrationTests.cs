@@ -53,7 +53,7 @@ public sealed class NatsHealthCheckIntegrationTests : NatsEventBusTestBase
         };
         await using var pool = new AbpNatsConnectionPool(Options.Create(options));
 
-        var result = await new NatsHealthCheck(pool)
+        var result = await new NatsHealthCheck(pool, Options.Create(options))
             .CheckHealthAsync(new HealthCheckContext());
 
         result.Status.ShouldBe(HealthStatus.Unhealthy);

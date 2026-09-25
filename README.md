@@ -81,6 +81,24 @@ identity used for durable consumers. Keep these values independent when a
 service has more than one event-bus role. The event-bus identity has no fallback
 to the connection name; startup fails when it is missing or blank.
 
+Optional TLS settings can be supplied under `TrueParser:Nats:Tls`. They use
+NATS.Net's `NatsTlsOpts` fields and apply to every pooled connection:
+
+```json
+{
+  "TrueParser": {
+    "Nats": {
+      "Tls": {
+        "CaFile": "/etc/certs/nats-ca.pem",
+        "CertFile": "/etc/certs/client.pem",
+        "KeyFile": "/etc/certs/client-key.pem",
+        "InsecureSkipVerify": false
+      }
+    }
+  }
+}
+```
+
 ### 4. Use — identical to any ABP event bus
 
 ```csharp

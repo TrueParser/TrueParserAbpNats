@@ -57,6 +57,8 @@ public class NatsConnectionPool : INatsConnectionPool, ISingletonDependency, IAs
 
         var natsOpts = NatsOpts.Default with { Url = url };
 
+        natsOpts = natsOpts with { TlsOpts = _options.Tls };
+
         if (!string.IsNullOrEmpty(_options.ClientName))
         {
             natsOpts = natsOpts with { Name = _options.ClientName };

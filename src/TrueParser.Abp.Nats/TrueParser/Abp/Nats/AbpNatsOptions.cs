@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using NATS.Client.Core;
 
 namespace TrueParser.Abp.Nats;
 
@@ -15,6 +16,11 @@ public class AbpNatsOptions
     public string? Seed { get; set; }
     
     public string? ClientName { get; set; }
+
+    /// <summary>
+    /// TLS settings applied to each connection created by the pool.
+    /// </summary>
+    public NatsTlsOpts Tls { get; set; } = NatsTlsOpts.Default;
 
     public Dictionary<string, string> NamedConnections { get; set; } = new();
 
