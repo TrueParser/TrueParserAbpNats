@@ -20,6 +20,27 @@ public sealed class NatsConnectionIntegrationTests
         _jwtFixture = jwtFixture;
     }
 
+    [NatsEnvironmentFact("NATS_TEST_URL", "NATS_AUTH_TEST_URL", "NATS_AUTH_TEST_USERNAME", "NATS_AUTH_TEST_PASSWORD")]
+    public async Task Named_Connection_Can_Use_Basic_Credentials_In_Its_Url()
+    {
+        var authenticatedUrl = new UriBuilder(RequiredEnvironmentVariable("NATS_AUTH_TEST_URL"))
+        {
+            UserName = RequiredEnvironmentVariable("NATS_AUTH_TEST_USERNAME"),
+            Password = RequiredEnvironmentVariable("NATS_AUTH_TEST_PASSWORD")
+        }.Uri.ToString();
+        var options = new AbpNatsOptions
+        {
+            Connections = RequiredEnvironmentVariable("NATS_TEST_URL"),
+            NamedConnections = { ["Authenticated"] = authenticatedUrl }
+        };
+
+        await using var pool = new AbpNatsConnectionPool(Options.Create(options));
+        var connection = await pool.GetAsync("Authenticated");
+        var jetStream = connection.CreateJetStreamContext();
+
+        await jetStream.GetAccountInfoAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
     [NatsEnvironmentFact("NATS_AUTH_TEST_URL", "NATS_AUTH_TEST_USERNAME", "NATS_AUTH_TEST_PASSWORD")]
     public async Task UsernamePassword_Authentication_With_Valid_Credentials_Should_Connect()
     {

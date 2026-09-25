@@ -12,6 +12,7 @@ public class JetStreamContextAccessor : IJetStreamContextAccessor, ISingletonDep
 {
     private readonly INatsConnectionPool _connectionPool;
     private readonly ConcurrentDictionary<string, (INatsConnection Connection, INatsJSContext Context)> _contexts = new();
+    private readonly object _contextsLock = new();
 
     public JetStreamContextAccessor(INatsConnectionPool connectionPool)
     {
@@ -28,9 +29,17 @@ public class JetStreamContextAccessor : IJetStreamContextAccessor, ISingletonDep
             return cached.Context;
         }
 
-        // Connection object is new or was replaced — create a fresh JetStream context.
-        var context = connection.CreateJetStreamContext();
-        _contexts[cacheKey] = (connection, context);
-        return context;
+        lock (_contextsLock)
+        {
+            if (_contexts.TryGetValue(cacheKey, out cached) && ReferenceEquals(cached.Connection, connection))
+            {
+                return cached.Context;
+            }
+
+            // Connection object is new or was replaced — create a fresh JetStream context.
+            var context = connection.CreateJetStreamContext();
+            _contexts[cacheKey] = (connection, context);
+            return context;
+        }
     }
 }

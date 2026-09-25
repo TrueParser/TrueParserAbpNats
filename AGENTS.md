@@ -54,67 +54,75 @@ When changing this area, verify the impact on the following repository contracts
 
 Do not change stream retention, consumer delivery semantics, subject naming, acknowledgement behavior, connection selection, or lifecycle ownership as an incidental refactor. Add focused regression coverage when any of these contracts changes.
 
-## Roslyn compiler MCP
 
-For C# symbols and relationships, the Roslyn MCP server `roslyn_code_navigator` is the primary navigation and compilation aid. Use it before text search when the question is semantic.
+## Glider MCP - Compiler-Semantic C# Analysis
 
-Use the available Roslyn operations for:
+This repository has access to the Glider MCP server, which provides compiler-grade semantic analysis of the .NET codebase.
 
-- symbol discovery: `SearchSymbols` and `GetSymbolInfo`;
-- references, callers, implementations, and inheritance: `FindReferences` and `FindImplementations`;
-- project/dependency inspection: `ListProjects` and `AnalyzeDependencies`;
-- compiler verification: `BuildSolution`;
-- test execution and full logs when useful: `TestSolution`, `StartTest`, `GetTestStatus`, and `GetTestTrx`.
+### Core Rule
 
-The current solution is `.slnx`; the Roslyn navigator currently accepts `.sln`, `.slnf`, and `.csproj` paths, so pass the relevant `.csproj` when a Roslyn operation rejects the solution path. Use the repository solution with the normal `dotnet` CLI for solution-wide operations.
+For C# symbols and relationships, Glider MCP is the primary and authoritative navigation mechanism.
 
-For a C# change:
+Do not use `grep`, `find`, `rg`, Graft literal search, or other text-based matching to locate C# symbol definitions, implementations, references, callers, inheritance relationships, semantic dependencies, or compiler diagnostics unless the Glider MCP tools cannot provide the required information.
 
-1. Use Graft for repository and subsystem context.
-2. Use Roslyn to resolve affected symbols, implementations, references, overrides, and dependency edges before changing a signature or contract.
-3. Read only the exact source ranges needed and make the smallest edit.
-4. Run Roslyn `BuildSolution` or an equivalent targeted build and resolve introduced compiler errors before testing.
-5. Run focused tests, then the broader required suite when the change warrants it.
+Graft remains required for repository orientation, architecture context, subsystem understanding, indexed source context, and non-semantic codebase exploration. Glider and Graft are complementary:
 
-Do not use `rg`, `grep`, `find`, or literal Graft search to establish C# symbol definitions, references, callers, implementations, or inheritance when Roslyn can answer the question. Text search remains appropriate for README/docs, JSON/YAML/XML/project files, scripts, SQL, literal messages, and other non-semantic content. If Roslyn is unavailable or cannot resolve the required fact, report the limitation and use Graft structural tools, then the narrowest text-search fallback.
+- use Graft to understand the repository, subsystem, architectural context, and relevant source areas;
+- use Glider to establish compiler-semantic facts about C# symbols, references, callers, implementations, overrides, inheritance, dependencies, impact, and diagnostics;
+- use normal local file tools to read exact source ranges and edit files after the relevant location is known.
 
-## Testing
+### Required Glider Usage
 
-Use the existing test project and test style. For a bug fix, first add a focused regression test that fails against the current implementation, then fix production code and prove that the same test passes without weakening it.
+Use Glider when:
 
-The normal test command is:
+1. **Locating C# symbols**
 
-```powershell
-dotnet test test/TrueParser.Abp.EventBus.Nats.Tests
-```
+- Find classes, interfaces, records, structs, enums, methods, constructors, properties, fields, events, and other C# symbols through Glider.
+- Do not guess file paths or rely on textual name matches when Glider can resolve the symbol.
+- When Glider returns a `symbolKey`, retain it and reuse it in later semantic operations instead of re-resolving the symbol by name.
 
-Tests marked with `NatsFact` are live NATS tests and run only when `RUN_NATS_TESTS=true`. They require a reachable NATS Server 2.10+ with JetStream enabled, for example `nats-server -js`. Do not claim live integration coverage when those tests were gated or skipped. Keep live-test gating explicit and preserve the existing test isolation, unique stream/subject setup, and cleanup behavior.
+2. **Tracing dependencies**
 
-When an integration or concurrency run fails, capture complete diagnostics rather than relying on truncated console output. Use detailed console logging or a TRX logger and inspect the resulting full log. Do not hide failures with skips, early returns, relaxed assertions, or changes to test timing solely to make a run green.
+- Before changing a method signature, interface, base class, shared contract, or other referenced C# symbol, use Glider references, callers, implementations, overrides, inheritance, dependency, and impact tools to identify affected code.
+- Do not change shared contracts until the affected semantic relationships are known.
 
-When a benchmark is required, capture a comparable baseline before implementation and repeat the same benchmark afterward.
+3. **Resolving dependency-injection implementations**
 
-Run only the tests relevant to the change first, then expand coverage in proportion to the blast radius. Once the required suite is green, stop editing; do not make an unrequested polishing or refactoring pass afterward.
+- When a service is consumed through an interface, use Glider to identify the concrete implementation or implementations.
+- Do not infer the implementation only from naming conventions, folder layout, or the interface definition.
 
-Use normal `bin/` and `obj/` output directories. Keep temporary and build artifacts out of Git and do not introduce custom artifact directories or alternate output paths without explicit authorization.
+4. **Understanding C# call flow**
 
-## Git and file safety
+- Use Glider caller and outgoing-call information when determining how methods, constructors, services, handlers, and other code paths are reached.
 
-- Use targeted status and diffs: `git status --short`, `git diff --stat`, and diffs for affected files.
-- Never reset, checkout, restore, clean, revert, overwrite, or delete existing work without explicit approval.
-- Do not commit, push, or force-push unless explicitly requested.
-- Use `apply_patch` for repository edits and keep the diff narrow.
-- Before a destructive or broad operation, resolve the exact target and confirm its scope. Prefer recoverable operations when possible.
+5. **Diagnosing compilation errors**
 
-## Completion report
+- When code changes introduce or may have introduced compiler errors, use Glider diagnostics to obtain the exact diagnostic code, file, line, and character when available.
+- Do not guess compiler failures when Glider diagnostics can provide the actual result.
 
-Report only verified facts:
+### C# Change Workflow
 
-- what changed and which files were affected;
-- builds and tests run, including whether live NATS tests were gated or executed;
-- any unverified database, provider, or environment-dependent behavior;
-- remaining open items or limitations;
-- one suitable Conventional Commit message (without creating the commit).
+For C# changes:
+
+1. **Analyze** - Use Graft for repository and subsystem context, then use Glider to map the affected C# symbols, implementations, callers, references, overrides, inheritance relationships, dependency relationships, and relevant call flow.
+
+2. **Plan** - Form the smallest required change from the exact semantic relationships discovered and the active `TASK.md` scope.
+
+3. **Execute** - Read only the necessary source ranges and edit only the required files using normal local file tools.
+
+4. **Verify** - Run Glider diagnostics after the code changes and resolve any compiler errors or broken references introduced by the change. Then run the focused tests required by this guide and the active `TASK.md` slice.
+
+### Workspace Guidance
+
+Use the repository's actual solution or project file for Glider analysis. Prefer the top-level `.sln` or `.slnx` when the task spans multiple projects, and use a specific `.csproj` only when the task is intentionally scoped to that project. Do not invent or convert solution formats.
+
+### Glider Failure Fallback
+
+If the Glider MCP server or a required Glider operation fails, report that limitation and then use the narrowest appropriate fallback.
+
+For C# fallback navigation, prefer Graft's indexed context and structural tools before raw text search. Raw `grep`, `find`, or `rg` for C# symbol discovery is a last resort after Glider and applicable Graft tooling cannot provide the required result.
+
+Text search remains appropriate for non-C# content such as configuration, documentation, JSON, YAML, XML, project files, scripts, SQL, literal error strings, generated artifacts, and data where compiler-semantic C# analysis does not apply.
 
 <!-- graft:start -->
 ## Graft — repo context graph

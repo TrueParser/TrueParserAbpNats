@@ -47,6 +47,8 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
     private volatile bool _streamCreated;
     private readonly SemaphoreSlim _streamSemaphore = new(1, 1);
     private readonly CancellationTokenSource _shutdownCts = new();
+    private readonly object _consumerSync = new();
+    private readonly ConcurrentDictionary<string, Task> _consumerTasks = new();
     private int _disposed;
 
     public NatsDistributedEventBus(
@@ -347,19 +349,24 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
             startupSignal.TrySetResult();
             Logger.LogError(ex, "Failed to subscribe to NATS subject for event: {EventName}", eventName);
         }
+        finally
+        {
+            // A stop can cancel the token before the consumer reaches its first
+            // successful bind. Always release startup waiters in that case too.
+            startupSignal.TrySetResult();
+        }
     }
 
     public virtual void OnApplicationShutdown(ApplicationShutdownContext context)
     {
-        try { _shutdownCts.Cancel(); }
-        catch (ObjectDisposedException) { }
+        CancelShutdown();
+        DrainConsumerTasksAsync().GetAwaiter().GetResult();
     }
 
-    public virtual Task OnApplicationShutdownAsync(ApplicationShutdownContext context)
+    public virtual async Task OnApplicationShutdownAsync(ApplicationShutdownContext context)
     {
-        try { _shutdownCts.Cancel(); }
-        catch (ObjectDisposedException) { }
-        return Task.CompletedTask;
+        CancelShutdown();
+        await DrainConsumerTasksAsync().ConfigureAwait(false);
     }
 
     public void Dispose()
@@ -369,19 +376,24 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
             return;
         }
 
-        _shutdownCts.Cancel();
+        CancelShutdown();
 
-        foreach (var kvp in ConsumerCancellationSources.ToArray())
+        try
         {
-            if (ConsumerCancellationSources.TryRemove(kvp.Key, out var consumerCancellationSource))
+            DrainConsumerTasksAsync().GetAwaiter().GetResult();
+        }
+        finally
+        {
+            foreach (var consumerCancellationSource in ConsumerCancellationSources.Values)
             {
-                consumerCancellationSource.Cancel();
                 consumerCancellationSource.Dispose();
             }
-        }
 
-        _shutdownCts.Dispose();
-        _streamSemaphore.Dispose();
+            ConsumerCancellationSources.Clear();
+            ConsumerStartupSignals.Clear();
+            _shutdownCts.Dispose();
+            _streamSemaphore.Dispose();
+        }
     }
 
     private static Guid? GetTenantId(INatsJSMsg<byte[]> msg)
@@ -402,12 +414,83 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
     private void StartConsumer(string eventName)
     {
-        var consumerCancellationSource = GetOrCreateConsumerCancellationSource(eventName);
-        var startupSignal = ConsumerStartupSignals.GetOrAdd(
-            eventName,
-            _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+        lock (_consumerSync)
+        {
+            if (Volatile.Read(ref _disposed) != 0 || _shutdownCts.IsCancellationRequested)
+            {
+                return;
+            }
 
-        _ = Task.Run(() => SubscribeToSubjectAsync(eventName, consumerCancellationSource.Token, startupSignal));
+            var consumerCancellationSource = GetOrCreateConsumerCancellationSource(eventName);
+            _consumerTasks.TryGetValue(eventName, out var previousTask);
+
+            if (previousTask is { IsCompleted: false } && !consumerCancellationSource.IsCancellationRequested)
+            {
+                return;
+            }
+
+            var startupSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            ConsumerStartupSignals[eventName] = startupSignal;
+
+            Task? consumerTask = null;
+            consumerTask = Task.Run(async () =>
+            {
+                try
+                {
+                    if (previousTask is { IsCompleted: false })
+                    {
+                        try
+                        {
+                            await previousTask.ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.LogWarning(ex, "Previous NATS consumer task failed for event: {EventName}", eventName);
+                        }
+                    }
+
+                    if (!_shutdownCts.IsCancellationRequested && !consumerCancellationSource.IsCancellationRequested)
+                    {
+                        await SubscribeToSubjectAsync(eventName, consumerCancellationSource.Token, startupSignal)
+                            .ConfigureAwait(false);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    startupSignal.TrySetResult();
+                    Logger.LogError(ex, "NATS consumer task failed for event: {EventName}", eventName);
+                }
+                finally
+                {
+                    startupSignal.TrySetResult();
+
+                    lock (_consumerSync)
+                    {
+                        if (ConsumerCancellationSources.TryGetValue(eventName, out var currentSource)
+                            && ReferenceEquals(currentSource, consumerCancellationSource))
+                        {
+                            ConsumerCancellationSources.TryRemove(eventName, out _);
+                        }
+
+                        if (ConsumerStartupSignals.TryGetValue(eventName, out var currentSignal)
+                            && ReferenceEquals(currentSignal, startupSignal))
+                        {
+                            ConsumerStartupSignals.TryRemove(eventName, out _);
+                        }
+
+                        if (_consumerTasks.TryGetValue(eventName, out var currentTask)
+                            && ReferenceEquals(currentTask, consumerTask))
+                        {
+                            _consumerTasks.TryRemove(eventName, out _);
+                        }
+                    }
+
+                    consumerCancellationSource.Dispose();
+                }
+            });
+
+            _consumerTasks[eventName] = consumerTask;
+        }
     }
 
     private async Task WaitForConsumerStartupsAsync()
@@ -445,13 +528,64 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
     private void StopConsumer(string eventName)
     {
-        if (ConsumerCancellationSources.TryRemove(eventName, out var consumerCancellationSource))
+        CancellationTokenSource? consumerCancellationSource = null;
+        lock (_consumerSync)
         {
-            consumerCancellationSource.Cancel();
-            consumerCancellationSource.Dispose();
+            ConsumerCancellationSources.TryRemove(eventName, out consumerCancellationSource);
+            ConsumerStartupSignals.TryRemove(eventName, out _);
         }
 
-        ConsumerStartupSignals.TryRemove(eventName, out _);
+        if (consumerCancellationSource != null)
+        {
+            try
+            {
+                consumerCancellationSource.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The consumer may have completed and disposed its source concurrently.
+            }
+        }
+    }
+
+    private void CancelShutdown()
+    {
+        try
+        {
+            _shutdownCts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Shutdown and disposal can be invoked by overlapping ABP lifecycle hooks.
+        }
+    }
+
+    private async Task DrainConsumerTasksAsync()
+    {
+        Task[] consumerTasks;
+        CancellationTokenSource[] cancellationSources;
+        lock (_consumerSync)
+        {
+            consumerTasks = _consumerTasks.Values.ToArray();
+            cancellationSources = ConsumerCancellationSources.Values.ToArray();
+        }
+
+        foreach (var cancellationSource in cancellationSources)
+        {
+            try
+            {
+                cancellationSource.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // A consumer can finish between the snapshot and cancellation.
+            }
+        }
+
+        if (consumerTasks.Length > 0)
+        {
+            await Task.WhenAll(consumerTasks).ConfigureAwait(false);
+        }
     }
 
     private static void ValidateExistingStream(StreamInfo streamInfo, StreamConfig expectedConfig)

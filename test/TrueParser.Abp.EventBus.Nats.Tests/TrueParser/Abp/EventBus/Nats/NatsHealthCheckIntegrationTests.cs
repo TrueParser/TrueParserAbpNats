@@ -13,6 +13,15 @@ namespace TrueParser.Abp.EventBus.Nats;
 public sealed class NatsHealthCheckIntegrationTests : NatsEventBusTestBase
 {
     [NatsFact]
+    public void Module_Should_Register_The_NATS_Health_Check()
+    {
+        var registrations = GetRequiredService<IOptions<HealthCheckServiceOptions>>()
+            .Value.Registrations;
+
+        registrations.ShouldContain(registration => registration.Name == "nats");
+    }
+
+    [NatsFact]
     public async Task HealthCheck_Should_Be_Healthy_When_NATS_And_JetStream_Are_Available()
     {
         var options = new AbpNatsOptions
@@ -26,6 +35,28 @@ public sealed class NatsHealthCheckIntegrationTests : NatsEventBusTestBase
         var result = await new NatsHealthCheck(pool).CheckHealthAsync(new HealthCheckContext());
 
         result.Status.ShouldBe(HealthStatus.Healthy);
+    }
+
+    [NatsFact]
+    public async Task HealthCheck_Should_Be_Unhealthy_When_A_Named_Connection_Is_Unreachable()
+    {
+        var unusedPort = GetFreePort();
+        var options = new AbpNatsOptions
+        {
+            Connections = Environment.GetEnvironmentVariable("NATS_TEST_URL")
+                ?? "nats://localhost:4222",
+            ClientName = $"HealthCheck_Named_{Guid.NewGuid():N}",
+            NamedConnections =
+            {
+                ["Analytics"] = $"nats://localhost:{unusedPort}"
+            }
+        };
+        await using var pool = new AbpNatsConnectionPool(Options.Create(options));
+
+        var result = await new NatsHealthCheck(pool)
+            .CheckHealthAsync(new HealthCheckContext());
+
+        result.Status.ShouldBe(HealthStatus.Unhealthy);
     }
 
     [NatsFact]
