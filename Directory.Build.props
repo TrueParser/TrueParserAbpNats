@@ -10,8 +10,8 @@
     <Authors>TrueParser</Authors>
     <Company>TrueParser</Company>
     <PackageLicenseExpression>LGPL-3.0-only</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/sreekanthedayar/TrueParserAbpNats</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/sreekanthedayar/TrueParserAbpNats</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/TrueParser/TrueParserAbpNats</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/TrueParser/TrueParserAbpNats</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
