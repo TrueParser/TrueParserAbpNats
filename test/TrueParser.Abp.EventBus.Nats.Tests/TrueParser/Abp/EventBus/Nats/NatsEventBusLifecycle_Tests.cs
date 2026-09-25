@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -7,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NATS.Client.Core;
 using NATS.Client.JetStream;
+using NATS.Client.JetStream.Models;
 using NATS.Net;
 using NSubstitute;
 using Shouldly;
@@ -26,6 +28,74 @@ namespace TrueParser.Abp.EventBus.Nats;
 
 public class NatsEventBusLifecycle_Tests
 {
+    [Fact]
+    public async Task JetStream_api_error_after_start_should_retry_consumer_loop()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var thirdLookup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var consumer = Substitute.For<INatsJSConsumer>();
+        consumer.Info.Returns(new ConsumerInfo
+        {
+            StreamName = "LifecycleStream",
+            Name = "LifecycleConsumer",
+            Ts = DateTimeOffset.UtcNow,
+            Config = new ConsumerConfig("LifecycleConsumer")
+            {
+                FilterSubject = "Lifecycle.ApiRecovery",
+                AckPolicy = ConsumerConfigAckPolicy.Explicit
+            },
+            Created = DateTimeOffset.UtcNow,
+            Delivered = new SequenceInfo(),
+            AckFloor = new SequenceInfo()
+        });
+        consumer.ConsumeAsync<byte[]>(cancellationToken: Arg.Any<CancellationToken>())
+            .Returns(TestAsyncEnumerable.EmptyMessages());
+
+        var jetStream = Substitute.For<INatsJSContext>();
+        var lookupCount = 0;
+        jetStream.GetConsumerAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                var currentLookup = Interlocked.Increment(ref lookupCount);
+                if (currentLookup == 2)
+                {
+                    throw new NatsJSApiException(new ApiError { Code = 503, Description = "temporary API error" });
+                }
+
+                if (currentLookup == 3)
+                {
+                    thirdLookup.TrySetResult();
+                    cancellation.Cancel();
+                }
+
+                return ValueTask.FromResult(consumer);
+            });
+
+        var accessor = Substitute.For<IJetStreamContextAccessor>();
+        accessor.GetContextAsync(Arg.Any<string?>())
+            .Returns(ValueTask.FromResult(jetStream));
+
+        using var eventBus = new ApiRecoveryNatsDistributedEventBus(accessor);
+        var startupSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var consumerTask = eventBus.RunConsumerAsync(cancellation.Token, startupSignal);
+
+        try
+        {
+            await startupSignal.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            startupSignal.Task.IsCompletedSuccessfully.ShouldBeTrue();
+            var retryOrExit = await Task.WhenAny(thirdLookup.Task, consumerTask, Task.Delay(TimeSpan.FromSeconds(12)));
+            retryOrExit.ShouldBe(thirdLookup.Task);
+            await consumerTask.WaitAsync(TimeSpan.FromSeconds(5));
+            lookupCount.ShouldBe(3);
+        }
+        finally
+        {
+            cancellation.Cancel();
+            await consumerTask.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
     [Fact]
     public async Task Typed_and_dynamic_subscriptions_for_the_same_name_should_start_one_consumer()
     {
@@ -135,6 +205,47 @@ public class NatsEventBusLifecycle_Tests
 
         contexts.All(context => ReferenceEquals(context, contexts[0])).ShouldBeTrue();
         await connection.DisposeAsync();
+    }
+}
+
+[DisableConventionalRegistration]
+internal sealed class ApiRecoveryNatsDistributedEventBus : NatsDistributedEventBus
+{
+    public ApiRecoveryNatsDistributedEventBus(IJetStreamContextAccessor accessor)
+        : base(
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = "LifecycleStream",
+                SubjectPrefix = "Lifecycle",
+                ClientName = "LifecycleApiRecovery"
+            }),
+            accessor,
+            Substitute.For<INatsEventSerializer>(),
+            Substitute.For<IServiceScopeFactory>(),
+            Options.Create(new AbpDistributedEventBusOptions()),
+            Substitute.For<ICurrentTenant>(),
+            Substitute.For<IUnitOfWorkManager>(),
+            Substitute.For<IGuidGenerator>(),
+            Substitute.For<IClock>(),
+            Substitute.For<IEventHandlerInvoker>(),
+            Substitute.For<ILocalEventBus>(),
+            Substitute.For<ICorrelationIdProvider>(),
+            Substitute.For<ILogger<NatsDistributedEventBus>>())
+    {
+    }
+
+    public Task RunConsumerAsync(CancellationToken cancellationToken, TaskCompletionSource startupSignal) =>
+        base.SubscribeToSubjectAsync("ApiRecovery", cancellationToken, startupSignal);
+
+    protected override Task EnsureStreamExistsAsync() => Task.CompletedTask;
+}
+
+internal static class TestAsyncEnumerable
+{
+    public static async IAsyncEnumerable<INatsJSMsg<byte[]>> EmptyMessages()
+    {
+        await Task.Yield();
+        yield break;
     }
 }
 

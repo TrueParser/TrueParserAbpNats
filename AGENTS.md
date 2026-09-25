@@ -55,6 +55,23 @@ When changing this area, verify the impact on the following repository contracts
 Do not change stream retention, consumer delivery semantics, subject naming, acknowledgement behavior, connection selection, or lifecycle ownership as an incidental refactor. Add focused regression coverage when any of these contracts changes.
 
 
+## Completion
+
+The final response should state only verified facts:
+
+- what changed and the affected files;
+- checks run and their results;
+- whether SQLite, MySQL, and live Caddy paths were actually exercised;
+- any remaining open items or environment-gated checks;
+- MUST include exactly one Conventional Commit message suggestion in the final
+  handoff whenever the requested slice is 100% verified. The message must
+  describe the completed work and omit phase/task identifiers. This suggestion
+  does not authorize creating a commit;
+- do not include a commit message or commit suggestion while the requested
+  phase slice is incomplete. A commit may be created only after the slice is
+  100% verified and the maintainer explicitly authorizes committing it.
+
+Never commit the change as part of the task unless the user explicitly asks.
 ## Glider MCP - Compiler-Semantic C# Analysis
 
 This repository has access to the Glider MCP server, which provides compiler-grade semantic analysis of the .NET codebase.

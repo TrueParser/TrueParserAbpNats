@@ -336,10 +336,16 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                 }
                 catch (NatsJSApiException ex)
                 {
-                    // JetStream returned an API error for this request. Transport
-                    // failures use other exception types and remain on the retry path.
-                    startupSignal.TrySetException(ex);
-                    return;
+                    if (!startupSignal.Task.IsCompleted)
+                    {
+                        startupSignal.TrySetException(ex);
+                        return;
+                    }
+
+                    Logger.LogError(
+                        ex,
+                        "NATS consumer API call failed for event: {EventName}. Restarting.",
+                        eventName);
                 }
                 catch (Exception ex)
                 {
