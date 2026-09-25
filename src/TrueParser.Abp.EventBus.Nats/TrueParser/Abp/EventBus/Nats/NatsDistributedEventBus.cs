@@ -334,6 +334,13 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                     startupSignal.TrySetException(ex);
                     return;
                 }
+                catch (NatsJSApiException ex)
+                {
+                    // JetStream returned an API error for this request. Transport
+                    // failures use other exception types and remain on the retry path.
+                    startupSignal.TrySetException(ex);
+                    return;
+                }
                 catch (Exception ex)
                 {
                     Logger.LogError(ex, "NATS consumer loop failed for event: {EventName}. Restarting.", eventName);
@@ -490,7 +497,8 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                             ConsumerCancellationSources.TryRemove(eventName, out _);
                         }
 
-                        if (ConsumerStartupSignals.TryGetValue(eventName, out var currentSignal)
+                        if (!startupSignal.Task.IsFaulted
+                            && ConsumerStartupSignals.TryGetValue(eventName, out var currentSignal)
                             && ReferenceEquals(currentSignal, startupSignal))
                         {
                             ConsumerStartupSignals.TryRemove(eventName, out _);
@@ -520,7 +528,8 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
     private async Task WaitForConsumerStartupsAsync()
     {
-        var startupTasks = ConsumerStartupSignals.Values.Select(signal => signal.Task).ToArray();
+        var startupSignals = ConsumerStartupSignals.ToArray();
+        var startupTasks = startupSignals.Select(pair => pair.Value.Task).ToArray();
         if (startupTasks.Length == 0)
         {
             return;
@@ -533,6 +542,17 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         catch (TimeoutException)
         {
             Logger.LogWarning("Timed out waiting for NATS consumers to start after 30 seconds. Continuing application startup.");
+        }
+        finally
+        {
+            foreach (var (eventName, startupSignal) in startupSignals)
+            {
+                if (ConsumerStartupSignals.TryGetValue(eventName, out var currentSignal)
+                    && ReferenceEquals(currentSignal, startupSignal))
+                {
+                    ConsumerStartupSignals.TryRemove(eventName, out _);
+                }
+            }
         }
     }
 
@@ -693,6 +713,11 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
     {
         _ = ParseMaxAge(NatsOptions.MaxAge);
         _ = ParsePrefetchCount(NatsOptions.PrefetchCount);
+
+        if (NatsOptions.ReplicaCount <= 0)
+        {
+            throw new AbpException("TrueParser:EventBus:Nats:ReplicaCount must be greater than zero.");
+        }
 
         if (NatsOptions.AckWait < TimeSpan.Zero)
         {

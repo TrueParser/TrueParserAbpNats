@@ -1965,6 +1965,75 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
     }
 
     [NatsFact]
+    public async Task Invalid_JetStream_Consumer_Filter_Should_Fail_Initialization_Fast()
+    {
+        var streamName = $"InvalidFilter_{Guid.NewGuid():N}";
+        var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.InvalidFilter.Events";
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = streamName,
+                SubjectPrefix = subjectPrefix,
+                ClientName = $"InvalidFilter_{Guid.NewGuid():N}"
+            }));
+        using var subscription = eventBus.Subscribe("foo.>.bar", new RetainedEventHandler(_ => { }));
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            await Should.ThrowAsync<NatsJSApiException>(() => eventBus.InitializeAsync());
+            stopwatch.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            try
+            {
+                await js.DeleteStreamAsync(streamName);
+            }
+            catch (NatsJSApiException ex) when (ex.Error.Code == 404)
+            {
+            }
+        }
+    }
+
+    [NatsFact]
+    public async Task Zero_ReplicaCount_Should_Fail_Before_Creating_The_Stream()
+    {
+        var streamName = $"ZeroReplicas_{Guid.NewGuid():N}";
+        var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.ZeroReplicas.Events";
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = streamName,
+                SubjectPrefix = subjectPrefix,
+                ClientName = $"ZeroReplicas_{Guid.NewGuid():N}",
+                ReplicaCount = 0
+            }));
+
+        try
+        {
+            await Should.ThrowAsync<AbpException>(() => eventBus.InitializeAsync());
+            var missingStream = await Should.ThrowAsync<NatsJSApiException>(async () =>
+                await js.GetStreamAsync(streamName));
+            missingStream.Error.Code.ShouldBe(404);
+        }
+        finally
+        {
+            try
+            {
+                await js.DeleteStreamAsync(streamName);
+            }
+            catch (NatsJSApiException ex) when (ex.Error.Code == 404)
+            {
+            }
+        }
+    }
+
+    [NatsFact]
     public async Task Configured_Redelivery_Controls_Should_Be_Applied_To_New_Consumer()
     {
         var streamName = $"Redelivery_{Guid.NewGuid():N}";
