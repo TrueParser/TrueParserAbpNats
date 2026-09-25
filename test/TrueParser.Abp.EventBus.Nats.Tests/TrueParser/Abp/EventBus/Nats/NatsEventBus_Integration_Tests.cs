@@ -1665,7 +1665,83 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
         }
         finally
         {
-            await js.DeleteStreamAsync(streamName);
+            try
+            {
+                await js.DeleteStreamAsync(streamName);
+            }
+            catch (NatsJSApiException ex) when (ex.Error.Code == 404)
+            {
+            }
+        }
+    }
+
+    [NatsFact]
+    public async Task Invalid_MaxAge_Should_Fail_Before_Creating_The_Stream()
+    {
+        var streamName = $"InvalidMaxAge_{Guid.NewGuid():N}";
+        var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.InvalidMaxAge.Events";
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = streamName,
+                SubjectPrefix = subjectPrefix,
+                ClientName = $"InvalidMaxAge_{Guid.NewGuid():N}",
+                MaxAge = "not-a-duration"
+            }));
+
+        try
+        {
+            await Should.ThrowAsync<AbpException>(() => eventBus.InitializeAsync());
+            var missingStream = await Should.ThrowAsync<NatsJSApiException>(async () =>
+                await js.GetStreamAsync(streamName));
+            missingStream.Error.Code.ShouldBe(404);
+        }
+        finally
+        {
+            try
+            {
+                await js.DeleteStreamAsync(streamName);
+            }
+            catch (NatsJSApiException ex) when (ex.Error.Code == 404)
+            {
+            }
+        }
+    }
+
+    [NatsFact]
+    public async Task Invalid_PrefetchCount_Should_Fail_Before_Creating_The_Stream()
+    {
+        var streamName = $"InvalidPrefetch_{Guid.NewGuid():N}";
+        var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.InvalidPrefetch.Events";
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = streamName,
+                SubjectPrefix = subjectPrefix,
+                ClientName = $"InvalidPrefetch_{Guid.NewGuid():N}",
+                PrefetchCount = "0"
+            }));
+
+        try
+        {
+            await Should.ThrowAsync<AbpException>(() => eventBus.InitializeAsync());
+            var missingStream = await Should.ThrowAsync<NatsJSApiException>(async () =>
+                await js.GetStreamAsync(streamName));
+            missingStream.Error.Code.ShouldBe(404);
+        }
+        finally
+        {
+            try
+            {
+                await js.DeleteStreamAsync(streamName);
+            }
+            catch (NatsJSApiException ex) when (ex.Error.Code == 404)
+            {
+            }
         }
     }
 

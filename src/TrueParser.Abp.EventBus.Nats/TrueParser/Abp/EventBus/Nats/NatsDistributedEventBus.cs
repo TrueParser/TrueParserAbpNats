@@ -93,8 +93,8 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
     {
         ResolveClientName();
         ValidateRetention();
-        await EnsureStreamExistsAsync();
         ValidateConsumerOptions();
+        await EnsureStreamExistsAsync();
         SubscribeHandlers(AbpDistributedEventBusOptions.Handlers);
         await WaitForConsumerStartupsAsync();
     }
@@ -118,18 +118,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                 NumReplicas = NatsOptions.ReplicaCount
             };
 
-            TimeSpan? maxAge;
-            try
-            {
-                maxAge = ParseMaxAge(NatsOptions.MaxAge);
-            }
-            catch (AbpException) when (!string.IsNullOrWhiteSpace(NatsOptions.MaxAge))
-            {
-                // Finish stream initialization before InitializeAsync reports invalid
-                // consumer options, so callers can clean up the partially initialized bus.
-                maxAge = null;
-            }
-
+            var maxAge = ParseMaxAge(NatsOptions.MaxAge);
             if (maxAge.HasValue)
             {
                 streamConfig.MaxAge = maxAge.Value;
@@ -944,7 +933,16 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
             headers.Add("Abp-Tenant-Id", CurrentTenant.Id.Value.ToString());
         }
 
-        await js.PublishAsync(subject, body, headers: headers);
+        var ack = await js.PublishAsync(subject, body, headers: headers);
+        try
+        {
+            ack.EnsureSuccess();
+        }
+        catch (NatsJSDuplicateMessageException)
+        {
+            // A duplicate message ID means JetStream already persisted this
+            // outbox event, so an idempotent retry remains successful.
+        }
     }
 
     // ── Outbox / Inbox ────────────────────────────────────────────────────────
