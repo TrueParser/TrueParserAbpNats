@@ -3,7 +3,6 @@
   <PropertyGroup>
     <!-- RootNamespace set to empty so we can use folders as namespaces properly -->
     <RootNamespace />
-    <PackageVersion>10.3.0-alpha</PackageVersion>
     <PackageId>TrueParser.Abp.Nats</PackageId>
     <Title>TrueParser.Abp.Nats</Title>
     <Description>Core NATS JetStream infrastructure for ABP applications.</Description>

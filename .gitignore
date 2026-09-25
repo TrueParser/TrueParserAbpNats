@@ -30,6 +30,7 @@ bld/
 .vs/
 # Uncomment if you use Visual Studio Code
 .vscode/
+*.csproj.lscache
 
 # MSTest test Results
 [Tt]est[Rr]esults/

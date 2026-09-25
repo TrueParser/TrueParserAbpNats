@@ -2,7 +2,6 @@
 
   <PropertyGroup>
     <RootNamespace />
-    <PackageVersion>10.3.0-alpha</PackageVersion>
     <PackageId>TrueParser.Abp.EventBus.Nats</PackageId>
     <Title>TrueParser.Abp.EventBus.Nats</Title>
     <Description>ABP distributed event bus implementation backed by NATS JetStream.</Description>
