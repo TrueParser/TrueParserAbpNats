@@ -408,13 +408,18 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
     private static Guid? GetTenantId(INatsJSMsg<byte[]> msg)
     {
-        var tenantIdValue = msg.Headers?.TryGetValue("Abp-Tenant-Id", out var values) == true
-            ? values.FirstOrDefault()?.ToString()
-            : null;
+        if (msg.Headers?.TryGetValue("Abp-Tenant-Id", out var values) != true)
+        {
+            return null;
+        }
 
-        return Guid.TryParse(tenantIdValue, out var tenantId)
-            ? tenantId
-            : null;
+        var tenantIdValue = values.FirstOrDefault()?.ToString();
+        if (Guid.TryParse(tenantIdValue, out var tenantId))
+        {
+            return tenantId;
+        }
+
+        throw new AbpException("NATS message contains an invalid Abp-Tenant-Id header.");
     }
 
     private CancellationTokenSource GetOrCreateConsumerCancellationSource(string eventName)
@@ -688,6 +693,26 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
     {
         _ = ParseMaxAge(NatsOptions.MaxAge);
         _ = ParsePrefetchCount(NatsOptions.PrefetchCount);
+
+        if (NatsOptions.AckWait < TimeSpan.Zero)
+        {
+            throw new AbpException("TrueParser:EventBus:Nats:AckWait cannot be negative.");
+        }
+
+        if (NatsOptions.BackOff is { } backOff)
+        {
+            if (backOff.Any(delay => delay < TimeSpan.Zero))
+            {
+                throw new AbpException(
+                    "TrueParser:EventBus:Nats:BackOff cannot contain negative durations.");
+            }
+
+            if (NatsOptions.MaxDeliver is > 0 and var maxDeliver && backOff.Count > maxDeliver)
+            {
+                throw new AbpException(
+                    "TrueParser:EventBus:Nats:BackOff cannot contain more durations than MaxDeliver.");
+            }
+        }
     }
 
     private void ValidateRetention()
@@ -810,7 +835,10 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
     private async Task ProcessMessageAsync(INatsJSMsg<byte[]> msg, string consumerPattern)
     {
-        if (msg.Data == null) return;
+        if (msg.Data == null)
+        {
+            throw new AbpException("NATS message payload is empty.");
+        }
 
         var eventName = GetEventNameFromSubject(msg.Subject);
         var correlationId = msg.Headers?.TryGetValue("Abp-Correlation-Id", out var values) == true

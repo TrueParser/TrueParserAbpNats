@@ -762,6 +762,179 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
         Volatile.Read(ref notificationCount).ShouldBe(1);
     }
 
+    [Fact]
+    public async Task Empty_Decoded_Payload_Should_Fail_Processing_Instead_Of_Being_Acknowledged()
+    {
+        using var eventBus = CreateCapturingEventBus();
+        eventBus.Dispose();
+        var message = Substitute.For<INatsJSMsg<byte[]>>();
+        message.Subject.Returns(eventBus.GetSubjectNameForTest("TestEvent"));
+        message.Data.Returns((byte[]?)null!);
+
+        await Should.ThrowAsync<AbpException>(
+            () => eventBus.ProcessMessageForTestAsync(message, "TestEvent"));
+    }
+
+    [NatsFact]
+    public async Task Empty_JetStream_Payload_Should_Not_Advance_The_Consumer_Ack_Floor()
+    {
+        var streamName = $"EmptyPayload_{Guid.NewGuid():N}";
+        var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.EmptyPayload.Events";
+        const string eventName = "TestEvent";
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = streamName,
+                SubjectPrefix = subjectPrefix,
+                ClientName = $"EmptyPayload_{Guid.NewGuid():N}"
+            }));
+        using var subscription = eventBus.Subscribe<TestEventData>(_ => Task.CompletedTask);
+
+        try
+        {
+            await eventBus.InitializeAsync();
+            var consumerName = (string)typeof(NatsDistributedEventBus)
+                .GetMethod("GetConsumerName", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(eventBus, [eventName])!;
+            var consumer = await js.GetConsumerAsync(streamName, consumerName);
+            var subject = $"{subjectPrefix}.{eventName}";
+
+            await js.PublishAsync(subject, Array.Empty<byte>());
+
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (consumer.Info.NumRedelivered == 0 && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(50);
+                consumer = await js.GetConsumerAsync(streamName, consumerName);
+            }
+
+            Assert.Equal(0UL, consumer.Info.AckFloor.StreamSeq);
+            Assert.True(consumer.Info.NumRedelivered > 0, "The empty payload was not negatively acknowledged for redelivery.");
+        }
+        finally
+        {
+            try
+            {
+                await js.DeleteStreamAsync(streamName);
+            }
+            catch (NatsJSApiException ex) when (ex.Error.Code == 404)
+            {
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Malformed_Tenant_Header_Should_Fail_Closed_Instead_Of_Using_Host_Context()
+    {
+        using var eventBus = CreateCapturingEventBus();
+        eventBus.Dispose();
+        Guid? tenantAtHandler = Guid.Empty;
+        using var handlerSubscription = eventBus.Subscribe<TestEventData>(_ =>
+        {
+            tenantAtHandler = GetRequiredService<ICurrentTenant>().Id;
+            return Task.CompletedTask;
+        });
+        var serializedEvent = GetRequiredService<INatsEventSerializer>().Serialize(new TestEventData
+        {
+            Message = "Malformed tenant header"
+        });
+        var messageWithoutTenantHeader = Substitute.For<INatsJSMsg<byte[]>>();
+        messageWithoutTenantHeader.Subject.Returns(eventBus.GetSubjectNameForTest("TestEvent"));
+        messageWithoutTenantHeader.Data.Returns(serializedEvent);
+        await eventBus.ProcessMessageForTestAsync(messageWithoutTenantHeader, "TestEvent");
+        Assert.Null(tenantAtHandler);
+
+        tenantAtHandler = Guid.Empty;
+        var message = Substitute.For<INatsJSMsg<byte[]>>();
+        message.Subject.Returns(eventBus.GetSubjectNameForTest("TestEvent"));
+        message.Data.Returns(serializedEvent);
+        var headers = new NATS.Client.Core.NatsHeaders();
+        headers.Add("Abp-Tenant-Id", "garbage");
+        message.Headers.Returns(headers);
+
+        var processingException = await Record.ExceptionAsync(
+            () => eventBus.ProcessMessageForTestAsync(message, "TestEvent"));
+        if (processingException is null)
+        {
+            Assert.Null(tenantAtHandler);
+        }
+
+        processingException.ShouldBeOfType<AbpException>();
+        Assert.Equal(Guid.Empty, tenantAtHandler);
+    }
+
+    [NatsFact]
+    public async Task Negative_AckWait_Should_Fail_Initialization_Instead_Of_Timing_Out_And_Continuing()
+    {
+        var streamName = $"InvalidAckWait_{Guid.NewGuid():N}";
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = streamName,
+                SubjectPrefix = $"{Guid.NewGuid():N}.TrueParser.InvalidAckWait.Events",
+                ClientName = $"InvalidAckWait_{Guid.NewGuid():N}",
+                AckWait = TimeSpan.FromSeconds(-1)
+            }));
+        using var subscription = eventBus.Subscribe<TestEventData>(_ => Task.CompletedTask);
+
+        try
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            await Should.ThrowAsync<AbpException>(() => eventBus.InitializeAsync());
+            stopwatch.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            try
+            {
+                await js.DeleteStreamAsync(streamName);
+            }
+            catch (NatsJSApiException ex) when (ex.Error.Code == 404)
+            {
+            }
+            catch (NatsJSApiNoResponseException)
+            {
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Negative_BackOff_Should_Fail_Initialization_Before_Connecting()
+    {
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = $"InvalidBackOff_{Guid.NewGuid():N}",
+                SubjectPrefix = $"{Guid.NewGuid():N}.TrueParser.InvalidBackOff.Events",
+                ClientName = $"InvalidBackOff_{Guid.NewGuid():N}",
+                BackOff = [TimeSpan.FromSeconds(-1)]
+            }));
+
+        await Should.ThrowAsync<AbpException>(() => eventBus.InitializeAsync());
+    }
+
+    [Fact]
+    public async Task BackOff_Longer_Than_MaxDeliver_Should_Fail_Initialization_Before_Connecting()
+    {
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = $"IncompatibleBackOff_{Guid.NewGuid():N}",
+                SubjectPrefix = $"{Guid.NewGuid():N}.TrueParser.IncompatibleBackOff.Events",
+                ClientName = $"IncompatibleBackOff_{Guid.NewGuid():N}",
+                BackOff = [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2)],
+                MaxDeliver = 1
+            }));
+
+        await Should.ThrowAsync<AbpException>(() => eventBus.InitializeAsync());
+    }
+
     [NatsFact]
     public async Task Typed_Direct_Event_Over_Live_Nats_Should_Emit_One_DistributedEventReceived()
     {
