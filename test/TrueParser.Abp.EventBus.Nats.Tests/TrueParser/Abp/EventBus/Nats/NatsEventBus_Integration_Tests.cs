@@ -1573,6 +1573,103 @@ public class NatsEventBus_Integration_Tests : NatsEventBusTestBase
     }
 
     [NatsFact]
+    public async Task Changing_Redelivery_Options_Should_Update_An_Existing_Durable()
+    {
+        var streamName = $"Redelivery_{Guid.NewGuid():N}";
+        var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.Redelivery.Events";
+        const string eventName = "Configured.Updates";
+        const string clientName = "Redelivery-Update";
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+        var initialOptions = new NatsDistributedEventBusOptions
+        {
+            StreamName = streamName,
+            SubjectPrefix = subjectPrefix,
+            ClientName = clientName,
+            AckWait = TimeSpan.FromSeconds(2),
+            MaxDeliver = 3,
+            PrefetchCount = "15"
+        };
+        var changedBackOff = new[] { TimeSpan.FromSeconds(7), TimeSpan.FromSeconds(14) };
+
+        try
+        {
+            using (var initialBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+                       ServiceProvider,
+                       Options.Create(initialOptions)))
+            using (initialBus.Subscribe(eventName, new RetainedEventHandler(_ => { })))
+            {
+                await initialBus.InitializeAsync();
+            }
+
+            using var updatedBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+                ServiceProvider,
+                Options.Create(new NatsDistributedEventBusOptions
+                {
+                    StreamName = streamName,
+                    SubjectPrefix = subjectPrefix,
+                    ClientName = clientName,
+                    AckWait = changedBackOff[0],
+                    MaxDeliver = 8,
+                    BackOff = changedBackOff,
+                    PrefetchCount = "30"
+                }));
+            using var updatedSubscription = updatedBus.Subscribe(
+                eventName,
+                new RetainedEventHandler(_ => { }));
+
+            await updatedBus.InitializeAsync();
+
+            var consumerName = GetExpectedConsumerName(streamName, clientName, eventName);
+            var consumer = await js.GetConsumerAsync(streamName, consumerName);
+            var actualConfig = consumer.Info.Config;
+            var actualValues =
+                $"AckWait={actualConfig.AckWait}; MaxDeliver={actualConfig.MaxDeliver}; " +
+                $"BackOff={string.Join(",", actualConfig.Backoff ?? Array.Empty<TimeSpan>())}; " +
+                $"MaxAckPending={actualConfig.MaxAckPending}";
+            var expectedValues =
+                $"AckWait={changedBackOff[0]}; MaxDeliver=8; " +
+                $"BackOff={string.Join(",", changedBackOff)}; MaxAckPending=30";
+
+            actualValues.ShouldBe(expectedValues);
+        }
+        finally
+        {
+            await js.DeleteStreamAsync(streamName);
+        }
+    }
+
+    [NatsFact]
+    public async Task Invalid_MaxAge_And_PrefetchCount_Should_Fail_Fast()
+    {
+        var streamName = $"InvalidConfig_{Guid.NewGuid():N}";
+        var subjectPrefix = $"{Guid.NewGuid():N}.TrueParser.InvalidConfig.Events";
+        var eventName = "Invalid.Values";
+        var js = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+        using var eventBus = ActivatorUtilities.CreateInstance<NatsDistributedEventBus>(
+            ServiceProvider,
+            Options.Create(new NatsDistributedEventBusOptions
+            {
+                StreamName = streamName,
+                SubjectPrefix = subjectPrefix,
+                ClientName = $"InvalidConfig_{Guid.NewGuid():N}",
+                MaxAge = "not-a-duration",
+                PrefetchCount = "many"
+            }));
+        using var subscription = eventBus.Subscribe(
+            eventName,
+            new RetainedEventHandler(_ => { }));
+
+        try
+        {
+            await Should.ThrowAsync<AbpException>(() => eventBus.InitializeAsync());
+        }
+        finally
+        {
+            await js.DeleteStreamAsync(streamName);
+        }
+    }
+
+    [NatsFact]
     public async Task Configured_Redelivery_Controls_Should_Be_Applied_To_New_Consumer()
     {
         var streamName = $"Redelivery_{Guid.NewGuid():N}";

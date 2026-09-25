@@ -22,6 +22,34 @@ namespace TrueParser.Abp.EventBus.Nats;
 public sealed class OutboxBatchIntegrationTests : NatsEventBusTestBase
 {
     [NatsFact]
+    public async Task Auto_Created_Stream_Should_Deduplicate_Repeated_Outbox_Message_Id()
+    {
+        var options = CreateOptions("OutboxBatch.DefaultDuplicateWindow");
+        var eventBus = CreateEventBus(options);
+        var jetStream = await GetRequiredService<IJetStreamContextAccessor>().GetContextAsync();
+        var outgoingEvent = CreateEvents("OutboxBatch.DefaultDuplicateWindow", 1).Single();
+
+        try
+        {
+            await eventBus.InitializeAsync();
+            var stream = await jetStream.GetStreamAsync(options.StreamName);
+            stream.Info.Config.DuplicateWindow.ShouldBe(TimeSpan.FromMinutes(2));
+            _ = await CreateConsumerAsync(jetStream, options, "DefaultDuplicateWindow");
+
+            await eventBus.PublishFromOutboxAsync(outgoingEvent, new OutboxConfig("OutboxBatch"));
+            await eventBus.PublishFromOutboxAsync(outgoingEvent, new OutboxConfig("OutboxBatch"));
+
+            stream = await jetStream.GetStreamAsync(options.StreamName);
+            stream.Info.State.Messages.ShouldBe(1);
+        }
+        finally
+        {
+            eventBus.Dispose();
+            await DeleteStreamAsync(jetStream, options.StreamName);
+        }
+    }
+
+    [NatsFact]
     public async Task PublishManyFromOutbox_Should_Publish_All_Events_With_Original_MessageIds()
     {
         var options = CreateOptions("OutboxBatch.MessageIds");

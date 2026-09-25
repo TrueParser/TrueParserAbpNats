@@ -9,7 +9,6 @@
     <!-- NuGet metadata -->
     <Authors>TrueParser</Authors>
     <Company>TrueParser</Company>
-    <Version>0.1.0</Version>
     <PackageLicenseExpression>LGPL-3.0-only</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/sreekanthedayar/TrueParserAbpNats</PackageProjectUrl>
     <RepositoryUrl>https://github.com/sreekanthedayar/TrueParserAbpNats</RepositoryUrl>

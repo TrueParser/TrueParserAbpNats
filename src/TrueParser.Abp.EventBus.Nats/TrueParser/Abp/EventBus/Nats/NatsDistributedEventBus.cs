@@ -94,6 +94,7 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         ResolveClientName();
         ValidateRetention();
         await EnsureStreamExistsAsync();
+        ValidateConsumerOptions();
         SubscribeHandlers(AbpDistributedEventBusOptions.Handlers);
         await WaitForConsumerStartupsAsync();
     }
@@ -117,7 +118,18 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                 NumReplicas = NatsOptions.ReplicaCount
             };
 
-            var maxAge = ParseMaxAge(NatsOptions.MaxAge);
+            TimeSpan? maxAge;
+            try
+            {
+                maxAge = ParseMaxAge(NatsOptions.MaxAge);
+            }
+            catch (AbpException) when (!string.IsNullOrWhiteSpace(NatsOptions.MaxAge))
+            {
+                // Finish stream initialization before InitializeAsync reports invalid
+                // consumer options, so callers can clean up the partially initialized bus.
+                maxAge = null;
+            }
+
             if (maxAge.HasValue)
             {
                 streamConfig.MaxAge = maxAge.Value;
@@ -250,18 +262,20 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                     var js = await JetStreamContextAccessor.GetContextAsync(NatsOptions.ConnectionName);
                     await EnsureStreamExistsAsync();
 
-                    INatsJSConsumer consumer;
+                    INatsJSConsumer? consumer;
                     try
                     {
-                        // Existing durable consumer — bind without touching config.
-                        // The stored delivery sequence overrides DeliverPolicy, so
-                        // restarts resume from the last acked position automatically.
                         consumer = await js.GetConsumerAsync(NatsOptions.StreamName, consumerName, shutdownToken);
                     }
                     catch (NatsJSApiException ex) when (ex.Error.Code == 404)
                     {
-                        // New consumer (first deployment of this event type). The
-                        // configured initial policy applies only at creation time.
+                        consumer = null;
+                    }
+
+                    if (consumer is null)
+                    {
+                        // InitialDeliveryPolicy applies only when this durable is first
+                        // created. Existing durables keep their stored delivery position.
                         var consumerConfig = new ConsumerConfig(consumerName)
                         {
                             FilterSubject = subject,
@@ -291,6 +305,11 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
                         }
 
                         consumer = await js.CreateOrUpdateConsumerAsync(NatsOptions.StreamName, consumerConfig, shutdownToken);
+                    }
+                    else
+                    {
+                        ValidateExistingConsumer(consumer, subject, consumerName);
+                        consumer = await ApplyConfiguredConsumerSettingsAsync(js, consumer, shutdownToken);
                     }
 
                     ValidateExistingConsumer(consumer, subject, consumerName);
@@ -649,7 +668,8 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
         if (!double.TryParse(numberPart, out var amount))
         {
-            return null;
+            throw new AbpException(
+                $"Invalid TrueParser:EventBus:Nats:MaxAge value '{value}'. Use a TimeSpan or a duration ending in s, m, h, or d.");
         }
 
         return unit switch
@@ -658,8 +678,15 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
             'm' or 'M' => TimeSpan.FromMinutes(amount),
             'h' or 'H' => TimeSpan.FromHours(amount),
             'd' or 'D' => TimeSpan.FromDays(amount),
-            _ => null
+            _ => throw new AbpException(
+                $"Invalid TrueParser:EventBus:Nats:MaxAge value '{value}'. Use a TimeSpan or a duration ending in s, m, h, or d.")
         };
+    }
+
+    private void ValidateConsumerOptions()
+    {
+        _ = ParseMaxAge(NatsOptions.MaxAge);
+        _ = ParsePrefetchCount(NatsOptions.PrefetchCount);
     }
 
     private void ValidateRetention()
@@ -673,9 +700,15 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
 
     private static long? ParsePrefetchCount(string? value)
     {
-        if (!long.TryParse(value, out var prefetchCount) || prefetchCount <= 0)
+        if (string.IsNullOrWhiteSpace(value))
         {
             return null;
+        }
+
+        if (!long.TryParse(value, out var prefetchCount) || prefetchCount <= 0)
+        {
+            throw new AbpException(
+                $"Invalid TrueParser:EventBus:Nats:PrefetchCount value '{value}'. It must be a positive integer.");
         }
 
         return prefetchCount;
@@ -687,6 +720,45 @@ public class NatsDistributedEventBus : DistributedEventBusBase, ISingletonDepend
         var identity = string.Join("\0", NatsOptions.StreamName, clientName, eventName);
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..10].ToLowerInvariant();
         return SanitizeConsumerName($"{NatsOptions.StreamName}_{clientName}_{eventName}_{hash}");
+    }
+
+    private async Task<INatsJSConsumer> ApplyConfiguredConsumerSettingsAsync(
+        INatsJSContext js,
+        INatsJSConsumer consumer,
+        CancellationToken cancellationToken)
+    {
+        var config = consumer.Info.Config;
+        var changed = false;
+
+        if (NatsOptions.AckWait.HasValue && config.AckWait != NatsOptions.AckWait.Value)
+        {
+            config.AckWait = NatsOptions.AckWait.Value;
+            changed = true;
+        }
+
+        if (NatsOptions.MaxDeliver.HasValue && config.MaxDeliver != NatsOptions.MaxDeliver.Value)
+        {
+            config.MaxDeliver = NatsOptions.MaxDeliver.Value;
+            changed = true;
+        }
+
+        if (NatsOptions.BackOff is { Count: > 0 } backOff &&
+            !(config.Backoff?.SequenceEqual(backOff) ?? false))
+        {
+            config.Backoff = backOff.ToList();
+            changed = true;
+        }
+
+        var prefetchCount = ParsePrefetchCount(NatsOptions.PrefetchCount);
+        if (prefetchCount.HasValue && config.MaxAckPending != prefetchCount.Value)
+        {
+            config.MaxAckPending = prefetchCount.Value;
+            changed = true;
+        }
+
+        return changed
+            ? await js.UpdateConsumerAsync(NatsOptions.StreamName, config, cancellationToken)
+            : consumer;
     }
 
     private static void ValidateExistingConsumer(INatsJSConsumer consumer, string expectedSubject, string consumerName)
